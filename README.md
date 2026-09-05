@@ -120,6 +120,18 @@ lower values of the metric went with higher returns** (expected for `pe`, `pb`,
 the universe is survivorship-biased — see the caveats on the page. Also on the CLI as
 `lti factor-ic`.
 
+### 🔬 Stock detail — one company over time
+Sidebar: **Ticker** (matches the primary symbol *and* the full `tickers_all` list, so
+`JPM` resolves), **Log price axis**, **Mark 10-K filing dates**, **Split-adjust EPS /
+book value**.
+Body: seven tabs — **Price** (adjusted close with filing-date markers), **Income**
+(revenue → net income bars + EPS), **Margins & returns** (gross / net / FCF margin, ROE),
+**Balance sheet** (assets / liabilities / equity + debt-to-equity), **Cash flow**
+(CFO / capex / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
+and **Raw data** (the annual table + CSV). The valuation tab carries each 10-K's EPS and
+book value forward from its filing date and restates them onto today's share count using
+the split history pulled from Yahoo — without that, ratios across a split are wrong.
+
 ### Smoke mode
 
 For a fast end-to-end check on a small subset, set `LTI_SMOKE=1`. `lti update` then skips
@@ -149,7 +161,8 @@ src/lti/
   progress.py      `lti progress` per-stage pipeline dashboard
   cli.py           `lti` command-line entry point
   factor.py        cross-sectional IC of each metric vs forward return
-  app/             Streamlit: Home, Screener, Backtest, Factor analysis
+  stock.py         one company's annual fundamentals + valuation time series
+  app/             Streamlit: Home, Screener, Backtest, Factor analysis, Stock detail
 tests/             pure-logic unit tests (no network / SEC data)
 ```
 

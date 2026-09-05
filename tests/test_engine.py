@@ -144,6 +144,38 @@ def test_factor_ic_is_deterministic_and_scoped(fund, panel):
     assert any("not_a_metric" in w for w in r1.warnings)
 
 
+def test_stock_resolve_and_annual(fund):
+    from lti import stock
+
+    cik, sym = stock.resolve(fund, "t3")  # case-insensitive
+    assert (cik, sym) == (3, "T3")
+    assert stock.resolve(fund, "NOPE") == (None, "NOPE")
+
+    annual = stock.annual_fundamentals(fund, cik)
+    assert list(annual["fiscal_year"]) == sorted(annual["fiscal_year"])
+    assert annual["period_end"].is_unique
+    assert annual["roe"].notna().all()
+    assert "T3" in stock.list_tickers(fund)
+
+
+def test_stock_valuation_history_split_adjust(fund, panel):
+    from lti import stock
+
+    annual = stock.annual_fundamentals(fund, 1)
+    val = stock.valuation_history(annual, panel, "T1", freq="ME")
+    assert not val.empty
+    assert (val["price"] > 0).all()
+    assert val["pe"].notna().any()
+    assert (val["pe"].dropna() > 0).all()
+    assert stock.valuation_history(annual, panel, "ZZZ").empty
+
+    # a 2:1 split after every early filing halves pre-split EPS -> doubles P/E
+    splits = pd.Series([2.0], index=pd.to_datetime(["2099-01-01"]))
+    val_adj = stock.valuation_history(annual, panel, "T1", freq="ME", splits=splits)
+    pe_ratio = (val_adj["pe"].dropna() / val["pe"].dropna()).dropna()
+    assert np.allclose(pe_ratio, 2.0)
+
+
 def test_performance_helpers():
     curve = pd.Series(
         [100, 110, 90, 120, 130],
