@@ -26,7 +26,13 @@ python -m venv venv              # run from the repo dir so mise picks 3.12
 source venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
-pip install -e .                 # installs the `lti` CLI + package
+pip install -e ".[dev]"          # installs the `lti` CLI + package (+ pytest)
+```
+
+Run the unit tests (pure logic, no network or SEC data needed):
+
+```bash
+pytest -q
 ```
 
 Configuration for `secfsdstools` is generated automatically: importing `lti` renders
@@ -40,6 +46,7 @@ Configuration for `secfsdstools` is generated automatically: importing `lti` ren
 # 1. One-time: download all SEC quarterly data + build the index.
 #    Without LTI_SMOKE this also runs the multi-hour standardization pipeline.
 lti update --force
+#    (if the download already ran and you only need to re-run the pipeline: `lti pipeline`)
 
 # 2. Build the flat fundamentals table (data/derived/fundamentals.parquet)
 lti build-fundamentals
@@ -52,13 +59,44 @@ lti fetch-prices                 # thousands of tickers via yfinance — takes a
 # 4. Backtest a strategy
 lti backtest --metrics pe,debt_to_equity --top-n 10 --start 2011-01-01
 
-# 5. GUI
+# 5. GUI (see "GUI" section below)
 streamlit run src/lti/app/Home.py
 ```
 
 `lti progress` prints an ASCII progress bar for each pipeline stage (SEC data,
-standardization, fundamentals, ticker map, prices) — handy for checking on the
-multi-hour full build. `lti fetch-prices` shows a live `tqdm` bar while running.
+filter / standardize / concat, fundamentals, ticker map, prices) — handy for checking
+on the multi-hour full build. `lti fetch-prices` shows a live `tqdm` bar while running.
+
+## GUI
+
+```bash
+source venv/bin/activate
+streamlit run src/lti/app/Home.py          # opens http://localhost:8501
+```
+
+Navigate the three pages from the sidebar. Leave `LTI_SMOKE` unset to use the full
+`fundamentals.parquet`.
+
+### 🏠 Home
+Data-health dashboard — which artifacts exist, row counts, latest SEC quarter,
+fundamentals coverage, filings-per-year chart, price-cache summary. No controls; if
+something is missing it names the `lti` command to run.
+
+### 🔎 Screener — rank the universe as of a date
+Sidebar: **As of** (point-in-time date — only filings filed on/before it are used),
+**Min market cap ($M)**, **Rank by** (one or more of `pe`, `debt_to_equity`, `roe`,
+`net_margin`, `gross_margin`, `revenue_growth_1y`, `eps_growth_1y`, `fcf_margin`, `pb`,
+`earnings_yield`), **Top N**, **Require positive EPS**.
+Body: sortable ranked table, CSV download, a distribution histogram per chosen metric.
+Composite score = mean percentile-rank across the chosen metrics (lower = better).
+
+### 🧪 Backtest — simulate a strategy vs SPY
+Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month**,
+**Min market cap**, **Initial capital**); hit **Run backtest**.
+Body: equity curve vs SPY (log toggle), tiles (strategy/SPY CAGR, max drawdown, Sharpe),
+full stats table, a **survivorship-bias callout** with per-run delisting counts, the
+per-period summary, a holdings expander (every pick, every period, + CSV), and a warnings
+expander. Results are cached per exact config.
 
 ### Smoke mode
 
@@ -86,8 +124,10 @@ src/lti/
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
+  progress.py      `lti progress` per-stage pipeline dashboard
   cli.py           `lti` command-line entry point
   app/             Streamlit: Home, Screener, Backtest
+tests/             pure-logic unit tests (no network / SEC data)
 ```
 
 `data/` (gitignored) holds everything generated: `data/sec/` (secfsdstools),
