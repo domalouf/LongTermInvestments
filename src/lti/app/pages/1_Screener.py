@@ -9,7 +9,7 @@ import plotly.express as px
 import streamlit as st
 
 from lti import metrics as metrics_mod, pit, prices as prices_mod, ranking
-from lti.metrics import FUNDAMENTAL_METRICS, PRICE_METRICS
+from lti.metrics import FUNDAMENTAL_METRICS, LOWER_IS_BETTER, PRICE_METRICS
 
 st.set_page_config(page_title="Screener", page_icon="🔎", layout="wide")
 st.title("🔎 Screener")
@@ -76,13 +76,30 @@ except KeyError as exc:
 
 st.write(f"**{len(ranked)}** companies pass filters · showing top **{min(top_n, len(ranked))}**")
 
+# per-metric percentile rank (0% = best) so a multi-metric composite is legible
+ranked_metrics = [m for m in chosen if m in ranked.columns]
+pct_cols: list[str] = []
+if len(ranked_metrics) > 1:
+    for m in ranked_metrics:
+        col = f"{m}_pctile"
+        ranked[col] = ranked[m].rank(pct=True, ascending=m in LOWER_IS_BETTER)
+        pct_cols.append(col)
+
 display_cols = [
     c
     for c in ["rank", "ticker", "company", "fiscal_year", "period_end", "filed", "price", "market_cap",
-              *chosen, "composite_score"]
+              *ranked_metrics, *pct_cols, "composite_score"]
     if c in ranked.columns
 ]
-st.dataframe(ranked[display_cols].head(top_n), hide_index=True, use_container_width=True)
+top = ranked[display_cols].head(top_n)
+
+fmt = {m: "{:.2f}" for m in ranked_metrics}
+fmt.update({c: "{:.1%}" for c in [*pct_cols, "composite_score"] if c in top.columns})
+if "market_cap" in top.columns:
+    fmt["market_cap"] = "{:,.0f}"
+if "price" in top.columns:
+    fmt["price"] = "{:.2f}"
+st.dataframe(top.style.format(fmt, na_rep="—"), hide_index=True, use_container_width=True)
 
 st.download_button(
     "Download ranked CSV",
@@ -91,12 +108,32 @@ st.download_button(
     mime="text/csv",
 )
 
-st.subheader("Metric distributions")
-for m in chosen:
-    if m in ranked.columns:
+st.subheader("Ranked metric values")
+st.caption("Each top pick's actual value for every metric it was ranked on; the dashed line is the universe median.")
+for m in ranked_metrics:
+    picks = top[["ticker", m]].replace([float("inf"), float("-inf")], pd.NA).dropna()
+    if picks.empty:
+        continue
+    median = ranked[m].replace([float("inf"), float("-inf")], pd.NA).dropna().median()
+    order = list(picks["ticker"])[::-1]  # rank 1 on top
+    fig = px.bar(picks, x=m, y="ticker", orientation="h", text=m, title=m)
+    fig.update_traces(texttemplate="%{text:.2f}", textposition="outside", cliponaxis=False)
+    fig.update_layout(
+        height=max(240, 26 * len(picks) + 90), margin=dict(l=10, r=10, t=40, b=10),
+        xaxis_title="", yaxis_title="", yaxis=dict(categoryorder="array", categoryarray=order),
+    )
+    if pd.notna(median):
+        fig.add_vline(x=median, line_dash="dash", line_color="gray",
+                      annotation_text=f"median {median:.2f}", annotation_position="top")
+    st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander(f"{m} — universe distribution"):
         vals = ranked[m].replace([float("inf"), float("-inf")], pd.NA).dropna()
         if not vals.empty:
             q_lo, q_hi = vals.quantile(0.02), vals.quantile(0.98)
-            fig = px.histogram(vals[(vals >= q_lo) & (vals <= q_hi)], nbins=40, title=m)
-            fig.update_layout(showlegend=False, height=260, margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            hist = px.histogram(vals[(vals >= q_lo) & (vals <= q_hi)], nbins=40)
+            hist.update_layout(showlegend=False, height=260, margin=dict(l=10, r=10, t=10, b=10), xaxis_title=m)
+            for _, r in picks.iterrows():
+                if q_lo <= r[m] <= q_hi:
+                    hist.add_vline(x=r[m], line_width=1, line_color="rgba(220,80,80,0.6)")
+            st.plotly_chart(hist, use_container_width=True)
