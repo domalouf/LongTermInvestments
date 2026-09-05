@@ -137,3 +137,31 @@ for m in ranked_metrics:
                 if q_lo <= r[m] <= q_hi:
                     hist.add_vline(x=r[m], line_width=1, line_color="rgba(220,80,80,0.6)")
             st.plotly_chart(hist, use_container_width=True)
+
+st.subheader("Fair-value estimates")
+if "price" not in ranked.columns or not ranked["price"].notna().any():
+    st.caption("Needs the price cache — pick a price metric or set a market-cap floor so prices load.")
+else:
+    from lti.valuation import ValuationAssumptions, add_valuation_models
+
+    fv1, fv2 = st.columns(2)
+    disc = fv1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+    gcap = fv2.slider("Max growth", 0.05, 0.30, 0.15, 0.01, format="%.2f")
+    picks_snap = ranked.head(top_n)
+    v = add_valuation_models(
+        picks_snap, picks_snap["price"],
+        assumptions=ValuationAssumptions(discount_rate=disc, growth_cap=gcap),
+    )
+    from lti.valuation import MODELS
+
+    cols = ["ticker", "price", "est_growth", "fair_value_est", "fair_value_est_upside"]
+    cols += [f"{m}_upside" for m in MODELS if f"{m}_upside" in v.columns]
+    fv_table = v[[c for c in cols if c in v.columns]].copy()
+    fmt = {"price": "${:,.2f}", "est_growth": "{:.0%}", "fair_value_est": "${:,.2f}"}
+    fmt.update({c: "{:+.0%}" for c in fv_table.columns if c.endswith("_upside")})
+    st.dataframe(fv_table.style.format(fmt, na_rep="—"), hide_index=True, use_container_width=True)
+    st.caption(
+        "`*_upside` = model fair value ÷ price − 1. Blended `fair_value_est` is the median of the "
+        "models that produced a number. Growth is a 1-year figure clipped to [0, max] — crude; "
+        "the Stock page has per-company CAGRs and adjustable assumptions."
+    )

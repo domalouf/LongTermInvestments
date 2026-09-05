@@ -82,8 +82,9 @@ if annual.empty and not psym:
     st.warning(f"No fundamentals and no price history for {symbol}.")
     st.stop()
 
-price_tab, income_tab, margin_tab, bs_tab, cf_tab, val_tab, raw_tab = st.tabs(
-    ["Price", "Income", "Margins & returns", "Balance sheet", "Cash flow", "Valuation", "Raw data"]
+price_tab, income_tab, margin_tab, bs_tab, cf_tab, val_tab, fv_tab, raw_tab = st.tabs(
+    ["Price", "Income", "Margins & returns", "Balance sheet", "Cash flow",
+     "Valuation", "Fair value", "Raw data"]
 )
 
 with price_tab:
@@ -184,6 +185,105 @@ with val_tab:
         st.caption("Trailing multiple: price on each date ÷ the EPS / book value from the most "
                    "recent 10-K as of that date, restated to today's share count. Negative-earnings "
                    "stretches are dropped from P/E.")
+
+with fv_tab:
+    from lti.valuation import MODELS, ValuationAssumptions, add_valuation_models, historical_cagr
+
+    if annual.empty or not psym:
+        st.info("Fair-value models need annual fundamentals and a cached price.")
+    else:
+        latest = annual.iloc[[-1]].copy()
+        latest.index = pd.Index([cik], name="cik")
+        cur_price = float(panel[psym].dropna().iloc[-1])
+
+        # restate the latest per-share figures onto today's share count
+        div = 1.0
+        if not splits.empty:
+            fdate = pd.Timestamp(latest["filed"].iloc[0])
+            future = splits[splits.index > fdate]
+            div = float(future.prod()) if len(future) else 1.0
+        for c in ("eps", "book_value_per_share"):
+            if c in latest.columns:
+                latest[c] = latest[c] / div
+        if "shares_outstanding" in latest.columns:
+            latest["shares_outstanding"] = latest["shares_outstanding"] * div
+
+        cagr_eps = historical_cagr(annual, "eps", 5)
+        cagr_rev = historical_cagr(annual, "revenues", 5)
+
+        with st.expander("Assumptions", expanded=True):
+            a1, a2, a3 = st.columns(3)
+            disc = a1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+            term = a2.slider("Terminal growth", 0.0, 0.04, 0.025, 0.005, format="%.3f")
+            years = a3.slider("DCF window (years)", 5, 15, 10)
+
+            opts = []
+            if pd.notna(cagr_eps):
+                opts.append((f"EPS CAGR 5y ({cagr_eps:.1%})", float(cagr_eps)))
+            if pd.notna(cagr_rev):
+                opts.append((f"Revenue CAGR 5y ({cagr_rev:.1%})", float(cagr_rev)))
+            opts.append(("Custom", None))
+            labels = [o[0] for o in opts]
+            pick = st.radio("Growth rate", labels, horizontal=True)
+            g_val = dict(opts)[pick]
+            if g_val is None:
+                g_val = st.slider("Custom growth", 0.0, 0.30, 0.08, 0.01, format="%.2f")
+            st.caption(
+                "Growth feeds the DCF, Lynch and Graham-revised models (each caps it further). "
+                "5-year CAGR needs positive EPS / revenue at both ends."
+            )
+
+        assumptions = ValuationAssumptions(
+            discount_rate=disc, terminal_growth=term, dcf_years=years, fixed_growth=g_val
+        )
+        v = add_valuation_models(latest, pd.Series({cik: cur_price}), assumptions=assumptions)
+        row = v.iloc[0]
+
+        present = [m for m in MODELS if m in v.columns and pd.notna(row[m])]
+        if not present:
+            st.warning("No model could produce a value (needs positive EPS, FCF or dividends).")
+        else:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Current price", f"${cur_price:,.2f}")
+            m2.metric("Blended fair value", f"${row['fair_value_est']:,.2f}")
+            m3.metric("Upside to fair value", f"{row['fair_value_est_upside']:.0%}")
+
+            bars = pd.DataFrame(
+                {"model": present + ["blended"],
+                 "fair_value": [row[m] for m in present] + [row["fair_value_est"]]}
+            )
+            fig = px.bar(bars, x="fair_value", y="model", orientation="h", text="fair_value",
+                         title="Estimated fair value per share")
+            fig.update_traces(texttemplate="$%{text:,.2f}", textposition="outside", cliponaxis=False)
+            fig.add_vline(x=cur_price, line_dash="dash", line_color="crimson",
+                          annotation_text=f"price ${cur_price:,.2f}", annotation_position="top")
+            fig.update_layout(height=360, margin=dict(l=10, r=10, t=40, b=10),
+                              xaxis_title="", yaxis_title="")
+            st.plotly_chart(fig, use_container_width=True)
+
+            table = pd.DataFrame(
+                {
+                    "model": present,
+                    "fair_value": [row[m] for m in present],
+                    "upside_vs_price": [row[f"{m}_upside"] for m in present],
+                }
+            )
+            st.dataframe(
+                table.style.format({"fair_value": "${:,.2f}", "upside_vs_price": "{:+.0%}"}),
+                hide_index=True, use_container_width=True,
+            )
+            g_used = row.get("est_growth")
+            dy_used = row.get("dividend_yield")
+            bits = [f"growth **{g_used:.1%}**" if pd.notna(g_used) else None,
+                    f"dividend yield **{dy_used:.1%}**" if dy_used is not None and pd.notna(dy_used) else None,
+                    f"discount rate **{disc:.1%}**"]
+            st.caption("Inputs: " + " · ".join(b for b in bits if b) + ". "
+                       "DCF uses FCF/share; EPV capitalises EPS with no growth; Graham number "
+                       "= √(22.5·EPS·BVPS); Lynch fair P/E = growth% + yield%; DDM is Gordon growth.")
+            st.warning(
+                "Rough estimates from a single 10-K and a crude growth input — sensitive to the "
+                "assumptions above. Not investment advice."
+            )
 
 with raw_tab:
     if annual.empty:

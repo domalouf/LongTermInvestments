@@ -22,10 +22,10 @@ FUNDAMENTAL_METRICS = [
     "fcf_margin",
 ]
 
-PRICE_METRICS = ["pe", "pb", "earnings_yield"]
+PRICE_METRICS = ["pe", "pb", "earnings_yield", "peg"]
 
 # lower value = "better" (used as the default sort direction in ranking)
-LOWER_IS_BETTER = {"pe", "pb", "debt_to_equity"}
+LOWER_IS_BETTER = {"pe", "pb", "debt_to_equity", "peg"}
 
 
 def _safe_div(num: pd.Series, den: pd.Series) -> pd.Series:
@@ -76,6 +76,10 @@ def add_price_metrics(
         eps_pos = df["eps"].where(df["eps"] > 0)
         df["pe"] = _safe_div(price, eps_pos)
         df["earnings_yield"] = _safe_div(df["eps"], price)
+        # PEG: P/E over the earnings growth rate in percentage points (>0 only)
+        if "eps_growth_1y" in df.columns:
+            growth_pts = (df["eps_growth_1y"] * 100).where(df["eps_growth_1y"] > 0)
+            df["peg"] = _safe_div(df["pe"], growth_pts)
     if "book_value_per_share" in df.columns:
         bvps_pos = df["book_value_per_share"].where(df["book_value_per_share"] > 0)
         df["pb"] = _safe_div(price, bvps_pos)

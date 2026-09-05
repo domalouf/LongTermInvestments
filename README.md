@@ -87,11 +87,15 @@ something is missing it names the `lti` command to run.
 
 ### 🔎 Screener — rank the universe as of a date
 Sidebar: **As of** (point-in-time date — only filings filed on/before it are used),
-**Min market cap ($M)**, **Rank by** (one or more of `pe`, `debt_to_equity`, `roe`,
-`net_margin`, `gross_margin`, `revenue_growth_1y`, `eps_growth_1y`, `fcf_margin`, `pb`,
-`earnings_yield`), **Top N**, **Require positive EPS**.
-Body: sortable ranked table, CSV download, a distribution histogram per chosen metric.
-Composite score = mean percentile-rank across the chosen metrics (lower = better).
+**Min market cap ($M)**, **Rank by** (one or more of `pe`, `pb`, `peg`, `earnings_yield`,
+`debt_to_equity`, `current_ratio`, `roe`, `net_margin`, `gross_margin`, `fcf_margin`,
+`revenue_growth_1y`, `eps_growth_1y`), **Top N**, **Require positive EPS**.
+Body: ranked table (raw metric values + a `<metric>_pctile` per input when ranking by
+more than one, plus `composite_score` = mean percentile-rank, lower = better), CSV
+download, a **"Ranked metric values"** bar chart per metric (each pick's value labelled,
+universe median marked; the old histogram is in a per-metric expander), and a
+**"Fair-value estimates"** table running the intrinsic-value models (below) on the picks
+with adjustable discount rate / max growth.
 
 ### 🧪 Backtest — simulate a strategy vs SPY
 Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month**,
@@ -124,13 +128,27 @@ the universe is survivorship-biased — see the caveats on the page. Also on the
 Sidebar: **Ticker** (matches the primary symbol *and* the full `tickers_all` list, so
 `JPM` resolves), **Log price axis**, **Mark 10-K filing dates**, **Split-adjust EPS /
 book value**.
-Body: seven tabs — **Price** (adjusted close with filing-date markers), **Income**
+Body: eight tabs — **Price** (adjusted close with filing-date markers), **Income**
 (revenue → net income bars + EPS), **Margins & returns** (gross / net / FCF margin, ROE),
 **Balance sheet** (assets / liabilities / equity + debt-to-equity), **Cash flow**
 (CFO / capex / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
-and **Raw data** (the annual table + CSV). The valuation tab carries each 10-K's EPS and
-book value forward from its filing date and restates them onto today's share count using
-the split history pulled from Yahoo — without that, ratios across a split are wrong.
+**Fair value** (intrinsic-value models, below, with a per-company 5-year CAGR growth
+input and adjustable discount rate / terminal growth / DCF window), and **Raw data** (the
+annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and book
+value forward from its filing date and restate them onto today's share count using the
+split history pulled from Yahoo — without that, ratios across a split are wrong.
+
+### Intrinsic-value models (`lti.valuation`)
+`add_valuation_models()` turns a fundamentals snapshot + price into a fair value per
+share for each of: **two-stage DCF** (FCF/share grown at the estimated rate for N years
+then a Gordon terminal value, discounted at the required return), **Peter Lynch** (fair
+P/E = earnings-growth % + dividend yield %), **Graham number** (√(22.5·EPS·BVPS)),
+**Graham revised** (EPS·(8.5+2g)·4.4/Y), **DDM** (Gordon growth on dividends, perpetual
+growth capped at the terminal rate) and **EPV** (no-growth capitalised earnings, EPS/r).
+`fair_value_est` is the median of the models that produced a number; `*_upside` is
+`fair value ÷ price − 1`. Growth defaults to a one-year figure clipped to `[0, cap]` —
+crude; pass a multi-year `historical_cagr()` for a real estimate. These are rough,
+assumption-sensitive estimates, not investment advice.
 
 ### Smoke mode
 
@@ -153,7 +171,8 @@ src/lti/
   tickers.py       CIK <-> ticker map from SEC company_tickers.json
   fundamentals.py  build/load the flat fundamentals.parquet + coverage report
   prices.py        yfinance adjusted-close cache (wide parquet panel, resumable)
-  metrics.py       P/E, debt/equity, ROE, margins, growth, ...
+  metrics.py       P/E, P/B, PEG, debt/equity, ROE, margins, growth, ...
+  valuation.py     intrinsic-value models: DCF, Lynch, Graham, DDM, EPV
   pit.py           point-in-time snapshots (no look-ahead)
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine

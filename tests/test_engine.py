@@ -176,6 +176,56 @@ def test_stock_valuation_history_split_adjust(fund, panel):
     assert np.allclose(pe_ratio, 2.0)
 
 
+def test_peg_metric(fund):
+    snap = pit.snapshot_asof(fund, pd.Timestamp("2018-06-01"))
+    snap = metrics.add_fundamental_metrics(snap)
+    snap = metrics.add_price_metrics(snap, price=pd.Series(100.0, index=snap.index))
+    assert "peg" in snap.columns
+    assert (snap["peg"].dropna() > 0).all()
+
+
+def test_valuation_models_math():
+    from lti import valuation as val
+
+    df = pd.DataFrame(
+        {
+            "eps": [5.0, -1.0, 4.0],
+            "book_value_per_share": [20.0, 10.0, 0.0],
+            "free_cash_flow": [1000.0, 500.0, 800.0],
+            "shares_outstanding": [100.0, 100.0, 100.0],
+            "dividends_paid": [-200.0, 0.0, -100.0],
+            "eps_growth_1y": [0.10, 0.10, 0.50],
+        },
+        index=pd.Index([1, 2, 3], name="cik"),
+    )
+    price = pd.Series({1: 50.0, 2: 8.0, 3: 40.0})
+    a = val.ValuationAssumptions(discount_rate=0.10, terminal_growth=0.02, dcf_years=10, growth_cap=0.15)
+    out = val.add_valuation_models(df, price, assumptions=a)
+
+    assert out.loc[1, "graham_number"] == pytest.approx((22.5 * 5 * 20) ** 0.5)
+    assert np.isnan(out.loc[2, "graham_number"])  # negative eps
+    assert np.isnan(out.loc[3, "graham_number"])  # zero bvps
+
+    assert out.loc[1, "epv_value"] == pytest.approx(5.0 / 0.10)
+    assert np.isnan(out.loc[2, "epv_value"])
+
+    # Lynch: eps * (g% + div_yield%) = 5 * (10 + 200/100/50*100)
+    assert out.loc[1, "lynch_fair_value"] == pytest.approx(5.0 * (10.0 + 4.0))
+
+    assert out.loc[1, "dcf_value"] > out.loc[1, "epv_value"]  # growth adds value
+    assert out.loc[1, "fair_value_est_upside"] == pytest.approx(out.loc[1, "fair_value_est"] / 50.0 - 1)
+    assert np.isnan(out.loc[2, "ddm_value"])  # no dividend
+
+
+def test_historical_cagr(fund):
+    from lti import stock
+    from lti.valuation import historical_cagr
+
+    annual = stock.annual_fundamentals(fund, 1)
+    assert historical_cagr(annual, "revenues", 5) == pytest.approx(0.0)  # flat in the fixture
+    assert np.isnan(historical_cagr(annual, "not_a_column"))
+
+
 def test_performance_helpers():
     curve = pd.Series(
         [100, 110, 90, 120, 130],
