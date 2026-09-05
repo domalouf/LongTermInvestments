@@ -14,11 +14,21 @@ import requests
 _COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 
 
+def _pick_primary(tickers: list[str]) -> str:
+    """The most common-stock-like ticker for a multi-class issuer: prefer symbols
+    with no punctuation (preferreds / baby bonds carry ``-``/``.``), then the
+    shortest, then alphabetical. e.g. ``AMJB,JPM,JPM-PC`` -> ``JPM``."""
+    clean = [t for t in tickers if t and not any(c in t for c in "-.$/^")]
+    pool = clean or [t for t in tickers if t]
+    return min(pool, key=lambda t: (len(t), t))
+
+
 def refresh_cik_ticker_map() -> pd.DataFrame:
     """Download ``company_tickers.json`` and write ``cik_ticker.parquet``.
 
     Multi-class issuers (several tickers for one CIK) collapse to one row: the
-    first ticker becomes ``ticker``; all are kept comma-joined in ``tickers_all``.
+    most common-stock-like symbol becomes ``ticker`` (see :func:`_pick_primary`);
+    all are kept comma-joined in ``tickers_all``.
     """
     resp = requests.get(
         _COMPANY_TICKERS_URL,
@@ -38,11 +48,13 @@ def refresh_cik_ticker_map() -> pd.DataFrame:
         rows.sort_values(["cik", "ticker"])
         .groupby("cik", as_index=False)
         .agg(
-            ticker=("ticker", "first"),
-            tickers_all=("ticker", lambda s: ",".join(sorted(set(s.dropna())))),
+            tickers_all=("ticker", lambda s: sorted(set(s.dropna()))),
             company=("company", "first"),
         )
     )
+    grouped["ticker"] = grouped["tickers_all"].apply(_pick_primary).astype("string")
+    grouped["tickers_all"] = grouped["tickers_all"].apply(",".join)
+    grouped = grouped[["cik", "ticker", "tickers_all", "company"]]
 
     path = config.get_paths().cik_ticker_parquet
     path.parent.mkdir(parents=True, exist_ok=True)

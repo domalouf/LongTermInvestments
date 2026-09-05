@@ -62,6 +62,9 @@ lti backtest --metrics pe,debt_to_equity --top-n 10 --start 2011-01-01
 # 4b. See which metrics actually rank stocks by forward return
 lti factor-ic --start 2012-01-01 --horizon 12 --step 12
 
+# 4c. Today's most undervalued names by blended intrinsic value
+lti undervalued --top 30 --market-cap-min 2000 --min-models 3
+
 # 5. GUI (see "GUI" section below)
 streamlit run src/lti/app/Home.py
 ```
@@ -138,6 +141,19 @@ annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and
 value forward from its filing date and restate them onto today's share count using the
 split history pulled from Yahoo — without that, ratios across a split are wrong.
 
+### 🎯 Undervalued today — the widest value-vs-price gaps
+Sidebar: **As of** (defaults to today), **Min market cap ($M)**, **Models that must
+agree**, **Require positive EPS**, **Min ROE**, **Show top N**, plus the DCF assumptions
+(discount rate, terminal growth, max growth).
+Runs every intrinsic-value model across the whole point-in-time universe and ranks by the
+gap between blended fair value and the current price. Body: summary tiles, the ranked
+table (price, blended fair value, upside, per-model upside, `pe`/`pb`/`roe`/`net_margin`/
+`debt_to_equity`) + CSV, a top-20 upside bar chart, and a cheapness-vs-ROE scatter for
+spotting value traps. Valuing as of today against the latest 10-K keeps the
+split-adjustment problem out of the way; commodity/ETF trusts and >+500% upsides are
+filtered as data noise, but a single year's earnings can still be a cyclical peak — the
+page says so. Also on the CLI as `lti undervalued`.
+
 ### Intrinsic-value models (`lti.valuation`)
 `add_valuation_models()` turns a fundamentals snapshot + price into a fair value per
 share for each of: **two-stage DCF** (FCF/share grown at the estimated rate for N years
@@ -168,11 +184,11 @@ streamlit run src/lti/app/Home.py
 src/lti/
   config.py        paths + one-time secfsdstools config (import side-effect)
   sec_update.py    wrappers around secfsdstools update / automation pipeline
-  tickers.py       CIK <-> ticker map from SEC company_tickers.json
+  tickers.py       CIK <-> ticker map (primary = most common-stock-like symbol)
   fundamentals.py  build/load the flat fundamentals.parquet + coverage report
   prices.py        yfinance adjusted-close cache (wide parquet panel, resumable)
   metrics.py       P/E, P/B, PEG, debt/equity, ROE, margins, growth, ...
-  valuation.py     intrinsic-value models: DCF, Lynch, Graham, DDM, EPV
+  valuation.py     intrinsic-value models (DCF, Lynch, Graham, DDM, EPV) + rank_undervalued
   pit.py           point-in-time snapshots (no look-ahead)
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine
@@ -181,7 +197,7 @@ src/lti/
   cli.py           `lti` command-line entry point
   factor.py        cross-sectional IC of each metric vs forward return
   stock.py         one company's annual fundamentals + valuation time series
-  app/             Streamlit: Home, Screener, Backtest, Factor analysis, Stock detail
+  app/             Streamlit: Home, Screener, Backtest, Factor analysis, Stock, Undervalued
 tests/             pure-logic unit tests (no network / SEC data)
 ```
 

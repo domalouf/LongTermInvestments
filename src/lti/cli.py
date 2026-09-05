@@ -157,6 +157,41 @@ def cmd_factor_ic(args: argparse.Namespace) -> None:
             print("  ", w)
 
 
+def cmd_undervalued(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import prices
+    from lti.fundamentals import load_fundamentals
+    from lti.valuation import ValuationAssumptions, rank_undervalued
+
+    asof = args.asof or pd.Timestamp.today().strftime("%Y-%m-%d")
+    a = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
+    ranked = rank_undervalued(
+        load_fundamentals(),
+        prices.load_adj_close(),
+        asof,
+        assumptions=a,
+        market_cap_min=args.market_cap_min * 1e6,
+        require_positive_eps=not args.allow_negative_eps,
+        min_models=args.min_models,
+        min_roe=args.min_roe,
+        top_n=args.top,
+    )
+    if ranked.empty:
+        print(f"no names pass the filters as of {asof}")
+        return
+
+    cols = ["rank", "ticker", "company", "price", "fair_value_est", "fair_value_est_upside",
+            "n_models", "pe", "roe", "debt_to_equity"]
+    view = ranked[[c for c in cols if c in ranked.columns]].copy()
+    view["fair_value_est_upside"] = (view["fair_value_est_upside"] * 100).round(1)
+    for c in ("price", "fair_value_est", "pe", "roe", "debt_to_equity"):
+        if c in view.columns:
+            view[c] = view[c].round(2)
+    print(f"\n=== most undervalued as of {asof} ({len(ranked)} shown) ===")
+    print(view.to_string(index=False))
+
+
 def cmd_smoke(args: argparse.Namespace) -> None:
     """Full smoke chain assuming `lti update` already ran with LTI_SMOKE=1."""
     from lti import fundamentals, prices
@@ -234,6 +269,17 @@ def build_parser() -> argparse.ArgumentParser:
     fi.add_argument("--quantiles", type=int, default=5)
     fi.add_argument("--method", choices=["spearman", "pearson"], default="spearman")
     fi.set_defaults(func=cmd_factor_ic)
+
+    uv = sub.add_parser("undervalued", help="most undervalued names by blended intrinsic value")
+    uv.add_argument("--asof", default=None, help="date (default today)")
+    uv.add_argument("--top", type=int, default=30)
+    uv.add_argument("--market-cap-min", type=float, default=1000.0, help="floor ($M)")
+    uv.add_argument("--min-models", type=int, default=3, help="valuation models that must agree")
+    uv.add_argument("--min-roe", type=float, default=None, help="quality floor, e.g. 0.1")
+    uv.add_argument("--discount-rate", type=float, default=0.09)
+    uv.add_argument("--growth-cap", type=float, default=0.15)
+    uv.add_argument("--allow-negative-eps", action="store_true")
+    uv.set_defaults(func=cmd_undervalued)
 
     sm = sub.add_parser("smoke", help="run the full smoke chain (after `lti update`)")
     sm.set_defaults(func=cmd_smoke)

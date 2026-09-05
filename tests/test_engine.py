@@ -226,6 +226,28 @@ def test_historical_cagr(fund):
     assert np.isnan(historical_cagr(annual, "not_a_column"))
 
 
+def test_rank_undervalued(fund, panel):
+    from lti.valuation import ValuationAssumptions, rank_undervalued
+
+    # price the toy names cheap so the models flag big upside
+    cheap = panel.copy()
+    for c in [c for c in cheap.columns if c != "SPY"]:
+        cheap[c] = cheap[c] * 0.02
+
+    ranked = rank_undervalued(
+        fund, cheap, "2020-06-01",
+        assumptions=ValuationAssumptions(discount_rate=0.10),
+        market_cap_min=0.0, min_models=2, max_upside=None, top_n=5,
+    )
+    assert not ranked.empty
+    assert list(ranked["rank"]) == sorted(ranked["rank"])
+    # sorted by upside, descending
+    up = ranked["fair_value_est_upside"].to_numpy()
+    assert (up[:-1] >= up[1:]).all()
+    assert (ranked["n_models"] >= 2).all()
+    assert (ranked["fair_value_est_upside"] > 0).all()
+
+
 def test_performance_helpers():
     curve = pd.Series(
         [100, 110, 90, 120, 130],

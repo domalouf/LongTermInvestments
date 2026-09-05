@@ -193,8 +193,76 @@ def add_valuation_models(
 
     present = [m for m in MODELS if m in df.columns]
     df["fair_value_est"] = df[present].replace([np.inf, -np.inf], np.nan).median(axis=1)
+    df["n_models"] = df[present].replace([np.inf, -np.inf], np.nan).notna().sum(axis=1)
 
     for m in [*present, "fair_value_est"]:
         df[f"{m}_upside"] = _safe_div(df[m], price) - 1.0
 
     return df
+
+
+def rank_undervalued(
+    fund: pd.DataFrame,
+    panel: pd.DataFrame,
+    asof,
+    *,
+    assumptions: ValuationAssumptions | None = None,
+    market_cap_min: float = 1_000_000_000.0,
+    require_positive_eps: bool = True,
+    min_models: int = 3,
+    min_upside: float = 0.0,
+    max_upside: float | None = 5.0,
+    min_roe: float | None = None,
+    top_n: int | None = 50,
+) -> pd.DataFrame:
+    """The most undervalued names known at ``asof``, ranked by blended upside.
+
+    Point-in-time snapshot → fundamental + price metrics as of ``asof`` → every
+    valuation model → keep rows where at least ``min_models`` produced a number
+    and the blended upside is in ``(min_upside, max_upside]`` (the upper bound
+    drops data errors), then sort by ``fair_value_est_upside`` descending.
+
+    Valuing as of today against the latest 10-K sidesteps the split-adjustment
+    problem that distorts historical multiples: today's adjusted close equals the
+    real price and the filing's per-share figures are on a matching basis. A
+    split between the last filing and ``asof`` is the residual risk.
+    """
+    from lti import metrics as metrics_mod, pit, prices as prices_mod
+
+    asof = pd.Timestamp(asof)
+    snap = pit.snapshot_asof(fund, asof)
+    snap = snap[snap["ticker"].notna()]
+    if snap.empty:
+        return snap
+
+    snap = metrics_mod.add_fundamental_metrics(snap)
+    price_at = pd.Series(
+        {cik: prices_mod.price_on_or_before(panel, t, asof) for cik, t in snap["ticker"].items()}
+    )
+    shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else None
+    mcap = price_at * shares if shares is not None else None
+    snap = metrics_mod.add_price_metrics(snap, price=price_at, market_cap=mcap)
+
+    snap = snap[snap["price"].notna() & (snap["price"] > 0)]
+    if "revenues" in snap.columns:  # drop commodity / ETF trusts that file 10-Ks
+        snap = snap[snap["revenues"] > 0]
+    if market_cap_min and "market_cap" in snap.columns:
+        snap = snap[snap["market_cap"] >= market_cap_min]
+    if require_positive_eps and "eps" in snap.columns:
+        snap = snap[snap["eps"] > 0]
+    if min_roe is not None and "roe" in snap.columns:
+        snap = snap[snap["roe"] >= min_roe]
+    if snap.empty:
+        return snap
+
+    v = add_valuation_models(snap, snap["price"], assumptions=assumptions)
+    v = v[(v["n_models"] >= min_models) & v["fair_value_est_upside"].notna()]
+    v = v[v["fair_value_est_upside"] > min_upside]
+    if max_upside is not None:
+        v = v[v["fair_value_est_upside"] <= max_upside]
+    if v.empty:
+        return v
+
+    v = v.sort_values("fair_value_est_upside", ascending=False)
+    v.insert(0, "rank", np.arange(1, len(v) + 1))
+    return v.head(top_n) if top_n else v
