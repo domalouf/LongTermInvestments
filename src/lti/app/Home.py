@@ -83,3 +83,4 @@ except Exception as exc:  # noqa: BLE001
 st.divider()
 st.page_link("pages/1_Screener.py", label="→ Screener", icon="🔎")
 st.page_link("pages/2_Backtest.py", label="→ Backtest", icon="🧪")
+st.page_link("pages/3_Factor_Analysis.py", label="→ Factor analysis", icon="📐")

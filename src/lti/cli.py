@@ -130,6 +130,33 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             print("  ", w)
 
 
+def cmd_factor_ic(args: argparse.Namespace) -> None:
+    from lti.factor import ICConfig, compute_ic
+
+    kwargs = dict(
+        start=args.start,
+        end=args.end,
+        horizon_months=args.horizon,
+        step_months=args.step,
+        market_cap_min=args.market_cap_min * 1e6,
+        require_positive_eps=args.require_positive_eps,
+        quantiles=args.quantiles,
+        method=args.method,
+    )
+    if args.metrics:
+        kwargs["metrics"] = args.metrics.split(",")
+    result = compute_ic(ICConfig(**kwargs))
+
+    print("\n=== IC summary (sorted by |mean IC|) ===")
+    print(result.summary.round(4).to_string())
+    print("\n=== mean forward return by metric quantile (Q1 = lowest value) ===")
+    print(result.bucket_returns.round(4).to_string())
+    if result.warnings:
+        print(f"\n=== warnings ({len(result.warnings)}) ===")
+        for w in result.warnings[:30]:
+            print("  ", w)
+
+
 def cmd_smoke(args: argparse.Namespace) -> None:
     """Full smoke chain assuming `lti update` already ran with LTI_SMOKE=1."""
     from lti import fundamentals, prices
@@ -195,6 +222,18 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--end", default=None)
     bt.add_argument("--rebalance-month", type=int, default=1)
     bt.set_defaults(func=cmd_backtest)
+
+    fi = sub.add_parser("factor-ic", help="cross-sectional IC of each metric vs forward return")
+    fi.add_argument("--metrics", help="comma-separated; default = all known metrics")
+    fi.add_argument("--start", default="2011-01-01")
+    fi.add_argument("--end", default=None)
+    fi.add_argument("--horizon", type=int, default=12, help="forward-return window (months)")
+    fi.add_argument("--step", type=int, default=12, help="spacing of as-of dates (months)")
+    fi.add_argument("--market-cap-min", type=float, default=500.0, help="universe floor ($M)")
+    fi.add_argument("--require-positive-eps", action="store_true")
+    fi.add_argument("--quantiles", type=int, default=5)
+    fi.add_argument("--method", choices=["spearman", "pearson"], default="spearman")
+    fi.set_defaults(func=cmd_factor_ic)
 
     sm = sub.add_parser("smoke", help="run the full smoke chain (after `lti update`)")
     sm.set_defaults(func=cmd_smoke)

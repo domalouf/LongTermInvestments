@@ -102,6 +102,48 @@ def test_backtest_runs_and_is_deterministic(fund, panel):
     assert (r1.period_summary["n_selected"] == 3).all()
 
 
+def test_factor_ic_detects_monotonic_signal(fund, panel):
+    from lti.factor import ICConfig, compute_ic
+
+    cfg = ICConfig(
+        metrics=["debt_to_equity"],
+        start="2012-01-01",
+        end="2020-06-30",
+        horizon_months=12,
+        step_months=12,
+        market_cap_min=0.0,
+        min_names=5,
+        quantiles=3,
+    )
+    result = compute_ic(cfg, fund=fund, price_panel=panel)
+
+    row = result.summary.loc["debt_to_equity"]
+    # low debt/equity (low cik) compounds fastest in the toy panel -> strongly negative IC
+    assert row["mean_ic"] < -0.9
+    assert row["hit_rate"] == 1.0
+    assert row["n_periods"] >= 5
+    buckets = result.bucket_returns.loc["debt_to_equity"].dropna()
+    assert buckets.iloc[0] > buckets.iloc[-1]  # Q1 (cheap debt) beats Q3
+
+
+def test_factor_ic_is_deterministic_and_scoped(fund, panel):
+    from lti.factor import ICConfig, compute_ic
+
+    cfg = ICConfig(
+        metrics=["pe", "roe", "debt_to_equity", "not_a_metric"],
+        start="2013-01-01",
+        end="2020-06-30",
+        market_cap_min=0.0,
+        min_names=5,
+        quantiles=3,
+    )
+    r1 = compute_ic(cfg, fund=fund, price_panel=panel)
+    r2 = compute_ic(cfg, fund=fund, price_panel=panel)
+    assert r1.ic_by_period.equals(r2.ic_by_period)
+    assert set(r1.summary.index) <= {"pe", "roe", "debt_to_equity"}
+    assert any("not_a_metric" in w for w in r1.warnings)
+
+
 def test_performance_helpers():
     curve = pd.Series(
         [100, 110, 90, 120, 130],

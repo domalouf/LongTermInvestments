@@ -59,6 +59,9 @@ lti fetch-prices                 # thousands of tickers via yfinance — takes a
 # 4. Backtest a strategy
 lti backtest --metrics pe,debt_to_equity --top-n 10 --start 2011-01-01
 
+# 4b. See which metrics actually rank stocks by forward return
+lti factor-ic --start 2012-01-01 --horizon 12 --step 12
+
 # 5. GUI (see "GUI" section below)
 streamlit run src/lti/app/Home.py
 ```
@@ -74,7 +77,7 @@ source venv/bin/activate
 streamlit run src/lti/app/Home.py          # opens http://localhost:8501
 ```
 
-Navigate the three pages from the sidebar. Leave `LTI_SMOKE` unset to use the full
+Navigate the pages from the sidebar. Leave `LTI_SMOKE` unset to use the full
 `fundamentals.parquet`.
 
 ### 🏠 Home
@@ -97,6 +100,25 @@ Body: equity curve vs SPY (log toggle), tiles (strategy/SPY CAGR, max drawdown, 
 full stats table, a **survivorship-bias callout** with per-run delisting counts, the
 per-period summary, a holdings expander (every pick, every period, + CSV), and a warnings
 expander. Results are cached per exact config.
+
+### 📐 Factor analysis — which metrics predict returns
+Sidebar: **Metrics**, **Start/End**, **Forward-return horizon** (months), **As-of spacing**
+(months — set ≥ horizon for non-overlapping, honest t-stats), **Min market cap**,
+**Require positive EPS**, **Quantile buckets**, **Correlation** (spearman / pearson);
+hit **Run analysis**.
+
+For a grid of historical as-of dates the page takes a point-in-time snapshot (same
+no-look-ahead path as the backtest), computes every metric and each stock's forward
+return, then measures the **cross-sectional** correlation between metric and forward
+return on that date — the *Information Coefficient* (IC). Per-date ICs are aggregated
+into `mean_ic`, `ic_ir` (mean/std), `t_stat`, `hit_rate` (share of periods with the
+dominant sign), `q_spread` (top-minus-bottom quantile forward return) and `monotonicity`.
+Body: the sorted summary table, a mean-IC bar chart, the per-period IC time series for a
+chosen metric, and mean forward return by metric quantile. **A negative mean IC means
+lower values of the metric went with higher returns** (expected for `pe`, `pb`,
+`debt_to_equity`). Univariate IC ignores that metrics are correlated with each other, and
+the universe is survivorship-biased — see the caveats on the page. Also on the CLI as
+`lti factor-ic`.
 
 ### Smoke mode
 
@@ -126,7 +148,8 @@ src/lti/
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard
   cli.py           `lti` command-line entry point
-  app/             Streamlit: Home, Screener, Backtest
+  factor.py        cross-sectional IC of each metric vs forward return
+  app/             Streamlit: Home, Screener, Backtest, Factor analysis
 tests/             pure-logic unit tests (no network / SEC data)
 ```
 
