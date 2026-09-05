@@ -1,2 +1,17 @@
 venv/
 .env/
+.venv/
+
+# generated at runtime by lti.config (machine-absolute paths)
+/.secfsdstools.cfg
+
+# all generated data artifacts
+/data/
+
+# python
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/

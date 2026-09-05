@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lti"
+version = "0.1.0"
+description = "Analyze SEC financial datasets to screen and backtest long-term investment strategies"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+
+# Runtime deps are pinned in requirements.txt (kept in sync); listed loosely here.
+dependencies = [
+    "secfsdstools>=2.4,<3",
+    "pandas>=2.1,<2.3",
+    "numpy>=1.26,<2.0",
+    "pyarrow>=19",
+    "fastparquet>=2024.2",
+    "yfinance>=0.2.40,<0.3",
+    "curl_cffi>=0.7",
+    "streamlit>=1.36,<2",
+    "plotly>=5.22,<6",
+    "requests>=2.31,<3",
+    "python-dateutil>=2.9",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+lti = "lti.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lti = ["py.typed"]

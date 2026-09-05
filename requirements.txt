@@ -1,1 +1,21 @@
-secfsdstools
+# Core SEC data
+secfsdstools>=2.4,<3
+
+# Data stack (numpy<2 is forced by secfsdstools -> caps us at Python 3.12)
+pandas>=2.1,<2.3
+numpy>=1.26,<2.0
+pyarrow>=19
+fastparquet>=2024.2
+
+# Prices
+yfinance>=0.2.40,<0.3
+curl_cffi>=0.7
+
+# GUI
+streamlit>=1.36,<2
+plotly>=5.22,<6
+
+# Misc
+requests>=2.31,<3
+python-dateutil>=2.9
+tqdm>=4.66
