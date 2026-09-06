@@ -65,6 +65,9 @@ lti factor-ic --start 2012-01-01 --horizon 12 --step 12
 # 4c. Today's most undervalued names by blended intrinsic value
 lti undervalued --top 30 --market-cap-min 2000 --min-models 3
 
+# 4d. Robustness check: rerun a strategy over every 3y and 5y window in the full history
+lti rolling-backtest --metrics pe,debt_to_equity --top-n 10 --windows 3,5
+
 # 5. GUI (see "GUI" section below)
 streamlit run src/lti/app/Home.py
 ```
@@ -141,6 +144,21 @@ annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and
 value forward from its filing date and restate them onto today's share count using the
 split history pulled from Yahoo — without that, ratios across a split are wrong.
 
+### 🔁 Rolling backtest — is the edge consistent or a curve-fit?
+Sidebar builds the strategy like the single-period Backtest page, plus **Window lengths
+(years)** (e.g. 3 and 5), **Step between window starts** (months — 12 means yearly-spaced,
+heavily overlapping windows), and an optional **Earliest start / Latest end** (blank = use
+all available price history).
+Reruns `run_backtest` over every window of each chosen length spanning the requested range —
+e.g. every 3-year window and every 5-year window from the earliest cached price to the
+latest — instead of one start/end pick. Body: a summary table per window length (mean/median/
+worst/best CAGR, mean excess CAGR, `win_rate` = share of windows beating the benchmark, mean
+and worst max drawdown, mean Sharpe), a box plot of per-window CAGR by window length, the full
+per-window table + CSV, and a warnings expander. Also on the CLI as `lti rolling-backtest`
+(`--windows`, `--step-months`, `--start`, `--end`). Windows of the same length overlap heavily
+at a 12-month step, so treat the spread as illustrative rather than independent samples — and
+the single-period backtest's survivorship-bias caveat applies to every window here too.
+
 ### 🎯 Undervalued today — the widest value-vs-price gaps
 Sidebar: **As of** (defaults to today), **Min market cap ($M)**, **Models that must
 agree**, **Require positive EPS**, **Min ROE**, **Show top N**, plus the DCF assumptions
@@ -192,12 +210,13 @@ src/lti/
   pit.py           point-in-time snapshots (no look-ahead)
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine
+  rolling.py       reruns the backtest over many rolling N-year windows across all history
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard
   cli.py           `lti` command-line entry point
   factor.py        cross-sectional IC of each metric vs forward return
   stock.py         one company's annual fundamentals + valuation time series
-  app/             Streamlit: Home, Screener, Backtest, Factor analysis, Stock, Undervalued
+  app/             Streamlit: Home, Screener, Backtest, Factor analysis, Stock, Undervalued, Rolling Backtest
 tests/             pure-logic unit tests (no network / SEC data)
 ```
 

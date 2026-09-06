@@ -130,6 +130,29 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             print("  ", w)
 
 
+def cmd_rolling_backtest(args: argparse.Namespace) -> None:
+    from lti.ranking import ScreenSpec
+    from lti.rolling import RollingConfig, run_rolling_backtest
+
+    cfg = RollingConfig(
+        screen=ScreenSpec(metrics=args.metrics.split(","), top_n=args.top_n),
+        window_years=[int(y) for y in args.windows.split(",")],
+        step_months=args.step_months,
+        start=args.start,
+        end=args.end,
+        rebalance_month=args.rebalance_month,
+    )
+    result = run_rolling_backtest(cfg)
+    print("\n=== rolling-window summary ===")
+    print(result.summary.round(4).to_string(index=False))
+    print(f"\n=== per-window detail ({len(result.windows)} windows) ===")
+    print(result.windows.round(4).to_string(index=False))
+    if result.warnings:
+        print(f"\n=== warnings ({len(result.warnings)}) ===")
+        for w in result.warnings[:30]:
+            print("  ", w)
+
+
 def cmd_factor_ic(args: argparse.Namespace) -> None:
     from lti.factor import ICConfig, compute_ic
 
@@ -257,6 +280,19 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--end", default=None)
     bt.add_argument("--rebalance-month", type=int, default=1)
     bt.set_defaults(func=cmd_backtest)
+
+    rb = sub.add_parser(
+        "rolling-backtest",
+        help="backtest a strategy over many rolling N-year windows spanning all available data",
+    )
+    rb.add_argument("--metrics", default="pe,debt_to_equity")
+    rb.add_argument("--top-n", type=int, default=10)
+    rb.add_argument("--windows", default="3,5", help="comma-separated window lengths in years")
+    rb.add_argument("--step-months", type=int, default=12, help="spacing between window start dates")
+    rb.add_argument("--start", default=None, help="default: earliest available price date")
+    rb.add_argument("--end", default=None, help="default: latest available price date")
+    rb.add_argument("--rebalance-month", type=int, default=1)
+    rb.set_defaults(func=cmd_rolling_backtest)
 
     fi = sub.add_parser("factor-ic", help="cross-sectional IC of each metric vs forward return")
     fi.add_argument("--metrics", help="comma-separated; default = all known metrics")
