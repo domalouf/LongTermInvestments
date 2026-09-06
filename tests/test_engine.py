@@ -102,6 +102,45 @@ def test_backtest_runs_and_is_deterministic(fund, panel):
     assert (r1.period_summary["n_selected"] == 3).all()
 
 
+def test_rolling_backtest_spans_all_windows(fund, panel):
+    from lti.rolling import RollingConfig, run_rolling_backtest
+
+    cfg = RollingConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=3),
+        window_years=[3, 5],
+        step_months=12,
+        start="2012-01-01",
+        end="2020-01-01",
+        market_cap_min=0.0,
+    )
+    result = run_rolling_backtest(cfg, fund=fund, price_panel=panel)
+
+    assert set(result.windows["window_years"]) == {3, 5}
+    assert set(result.summary["window_years"]) == {3, 5}
+    # more 3y windows fit in the same span than 5y windows
+    counts = result.summary.set_index("window_years")["n_windows"]
+    assert counts[3] > counts[5]
+    # every window's end date is exactly window_years after its start
+    deltas = (result.windows["end"] - result.windows["start"]).dt.days / 365.25
+    assert np.allclose(deltas, result.windows["window_years"], atol=0.05)
+    # cheap-debt names beat the flat benchmark in this toy world, in (almost) every window
+    assert (result.summary["win_rate"] > 0.9).all()
+
+
+def test_rolling_backtest_rejects_window_longer_than_history(fund, panel):
+    from lti.rolling import RollingConfig, run_rolling_backtest
+
+    cfg = RollingConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=3),
+        window_years=[50],
+        start="2012-01-01",
+        end="2020-01-01",
+        market_cap_min=0.0,
+    )
+    with pytest.raises(RuntimeError):
+        run_rolling_backtest(cfg, fund=fund, price_panel=panel)
+
+
 def test_factor_ic_detects_monotonic_signal(fund, panel):
     from lti.factor import ICConfig, compute_ic
 
