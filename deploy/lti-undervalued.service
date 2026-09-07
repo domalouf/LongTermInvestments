@@ -1,0 +1,19 @@
+[Unit]
+Description=Publish the daily "undervalued today" snapshot to domalouf.com
+Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust if the repo is not at ~/Projects/LongTermInvestments:
+ExecStart=%h/Projects/LongTermInvestments/deploy/publish-undervalued.sh
+# yfinance can stall; don't let a hung run block the next night.
+TimeoutStartSec=1800
+Nice=10
+# Optional overrides (see the script header):
+# Environment=LTI_TOP_N=40
+# Environment=LTI_PI_DEST=pi:HealthBoard/piStuff/website/invest/
+
+[Install]
+WantedBy=default.target

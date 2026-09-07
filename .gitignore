@@ -8,6 +8,9 @@ venv/
 # all generated data artifacts
 /data/
 
+# staged output of deploy/publish-undervalued.sh
+/build/
+
 # python
 __pycache__/
 *.pyc

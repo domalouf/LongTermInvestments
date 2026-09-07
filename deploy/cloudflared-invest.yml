@@ -1,0 +1,22 @@
+# Locally-managed cloudflared tunnel for the private investing GUI.
+#
+# One-time, on the laptop server:
+#   cloudflared tunnel login                         # authorises the domalouf.com zone
+#   cloudflared tunnel create invest                 # prints the tunnel UUID + writes the creds json
+#   cloudflared tunnel route dns invest invest.domalouf.com
+#
+# Then copy this file to ~/.cloudflared/config.yml and fill in <TUNNEL-UUID>
+# and your home dir. This is a SEPARATE tunnel from the Pi's — the Pi keeps
+# serving domalouf.com, this one only serves invest.domalouf.com.
+
+tunnel: <TUNNEL-UUID>
+credentials-file: /home/<USER>/.cloudflared/<TUNNEL-UUID>.json
+
+# Some home-router NATs drop QUIC's UDP flows (this bit the Pi tunnel); http2 is
+# the safe transport here too.
+protocol: http2
+
+ingress:
+  - hostname: invest.domalouf.com
+    service: http://127.0.0.1:8501
+  - service: http_status:404

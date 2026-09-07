@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly "undervalued today" snapshot publish
+
+[Timer]
+# ~01:30 US Mountain (07:30 UTC in MDT / 08:30 UTC in MST) — well after the US
+# close and any late adjusted-close revisions. Adjust to taste.
+OnCalendar=*-*-* 07:30:00 UTC
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

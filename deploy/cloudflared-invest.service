@@ -1,0 +1,14 @@
+[Unit]
+Description=cloudflared tunnel for invest.domalouf.com
+Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
+After=network-online.target lti-streamlit.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared --config %h/.cloudflared/config.yml --no-autoupdate tunnel run invest
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

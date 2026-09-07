@@ -1,0 +1,19 @@
+[Unit]
+Description=LongTermInvestments Streamlit GUI (private — Cloudflare Access only)
+Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust if the repo is not at ~/Projects/LongTermInvestments:
+WorkingDirectory=%h/Projects/LongTermInvestments
+ExecStart=%h/Projects/LongTermInvestments/venv/bin/streamlit run src/lti/app/Home.py
+Restart=on-failure
+RestartSec=5
+# Everything (app + data) lives under $HOME; no elevated access needed.
+# Server binds 127.0.0.1:8501 via .streamlit/config.toml — reachable only
+# through the cloudflared tunnel.
+
+[Install]
+WantedBy=default.target
