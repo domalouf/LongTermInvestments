@@ -69,6 +69,13 @@ def cmd_fetch_prices(args: argparse.Namespace) -> None:
     print(report["status"].value_counts().to_string())
 
 
+def cmd_refresh_prices(args: argparse.Namespace) -> None:
+    from lti import prices
+
+    tickers = list(config.SMOKE_TICKERS) + ["SPY"] if args.smoke else None
+    prices.refresh_prices(tickers, lookback_days=args.lookback_days, batch_size=args.batch_size)
+
+
 def cmd_coverage(args: argparse.Namespace) -> None:
     from lti import fundamentals
 
@@ -112,8 +119,18 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     if args.config:
         cfg = _screen_from_json(args.config)
     else:
+        from lti.metrics import MAGIC_FORMULA_METRICS
+
+        metrics = list(MAGIC_FORMULA_METRICS) if args.magic_formula else args.metrics.split(",")
         cfg = BacktestConfig(
-            screen=ScreenSpec(metrics=args.metrics.split(","), top_n=args.top_n),
+            screen=ScreenSpec(
+                metrics=metrics,
+                top_n=args.top_n,
+                filters={
+                    "exclude_financials": args.exclude_financials or args.magic_formula,
+                    "exclude_utilities": args.exclude_utilities or args.magic_formula,
+                },
+            ),
             start=args.start,
             end=args.end,
             rebalance_month=args.rebalance_month,
@@ -160,36 +177,56 @@ def cmd_factor_ic(args: argparse.Namespace) -> None:
 def cmd_undervalued(args: argparse.Namespace) -> None:
     import pandas as pd
 
-    from lti import prices
+    from lti import prices, report
     from lti.fundamentals import load_fundamentals
     from lti.valuation import ValuationAssumptions, rank_undervalued
 
     asof = args.asof or pd.Timestamp.today().strftime("%Y-%m-%d")
     a = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
+    params = {
+        "asof": asof,
+        "top_n": args.top,
+        "market_cap_min": args.market_cap_min * 1e6,
+        "min_models": args.min_models,
+        "min_roe": args.min_roe,
+        "require_positive_eps": not args.allow_negative_eps,
+        "discount_rate": args.discount_rate,
+        "growth_cap": args.growth_cap,
+    }
     ranked = rank_undervalued(
         load_fundamentals(),
         prices.load_adj_close(),
         asof,
         assumptions=a,
-        market_cap_min=args.market_cap_min * 1e6,
-        require_positive_eps=not args.allow_negative_eps,
+        market_cap_min=params["market_cap_min"],
+        require_positive_eps=params["require_positive_eps"],
         min_models=args.min_models,
         min_roe=args.min_roe,
         top_n=args.top,
     )
-    if ranked.empty:
-        print(f"no names pass the filters as of {asof}")
-        return
 
-    cols = ["rank", "ticker", "company", "price", "fair_value_est", "fair_value_est_upside",
-            "n_models", "pe", "roe", "debt_to_equity"]
-    view = ranked[[c for c in cols if c in ranked.columns]].copy()
-    view["fair_value_est_upside"] = (view["fair_value_est_upside"] * 100).round(1)
-    for c in ("price", "fair_value_est", "pe", "roe", "debt_to_equity"):
-        if c in view.columns:
-            view[c] = view[c].round(2)
-    print(f"\n=== most undervalued as of {asof} ({len(ranked)} shown) ===")
-    print(view.to_string(index=False))
+    if args.out:
+        written = report.write_artifacts(ranked, args.out, asof=asof, params=params)
+        for p in written:
+            print("wrote", p)
+
+    if args.format == "json":
+        print(json.dumps(report.build_payload(ranked, asof=asof, params=params), indent=2))
+    elif args.format == "csv":
+        print(report.render_csv(ranked), end="")
+    elif args.format == "html":
+        print(report.render_html(ranked, asof=asof, params=params), end="")
+    elif not args.out:  # text (default) — skip when --out already reported paths
+        if ranked.empty:
+            print(f"no names pass the filters as of {asof}")
+            return
+        view = report.build_view(ranked)
+        view["fair_value_est_upside"] = (view["fair_value_est_upside"] * 100).round(1)
+        for c in ("price", "fair_value_est", "pe", "roe", "debt_to_equity"):
+            if c in view.columns:
+                view[c] = view[c].round(2)
+        print(f"\n=== most undervalued as of {asof} ({len(ranked)} shown) ===")
+        print(view.to_string(index=False))
 
 
 def cmd_smoke(args: argparse.Namespace) -> None:
@@ -243,6 +280,15 @@ def build_parser() -> argparse.ArgumentParser:
     fp.add_argument("--force", action="store_true")
     fp.set_defaults(func=cmd_fetch_prices)
 
+    rp = sub.add_parser(
+        "refresh-prices",
+        help="top up already-cached tickers with recent bars (cheap daily refresh)",
+    )
+    rp.add_argument("--smoke", action="store_true")
+    rp.add_argument("--lookback-days", type=int, default=7, help="recent window to re-download")
+    rp.add_argument("--batch-size", type=int, default=40)
+    rp.set_defaults(func=cmd_refresh_prices)
+
     cv = sub.add_parser("coverage", help="print fundamentals coverage report")
     cv.set_defaults(func=cmd_coverage)
 
@@ -256,6 +302,13 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--start", default="2011-01-01")
     bt.add_argument("--end", default=None)
     bt.add_argument("--rebalance-month", type=int, default=1)
+    bt.add_argument(
+        "--magic-formula",
+        action="store_true",
+        help="Greenblatt: rank on ebit_ev + roic, excluding financials and utilities",
+    )
+    bt.add_argument("--exclude-financials", action="store_true", help="drop SIC 6000-6799")
+    bt.add_argument("--exclude-utilities", action="store_true", help="drop SIC 4900-4999")
     bt.set_defaults(func=cmd_backtest)
 
     fi = sub.add_parser("factor-ic", help="cross-sectional IC of each metric vs forward return")
@@ -279,6 +332,17 @@ def build_parser() -> argparse.ArgumentParser:
     uv.add_argument("--discount-rate", type=float, default=0.09)
     uv.add_argument("--growth-cap", type=float, default=0.15)
     uv.add_argument("--allow-negative-eps", action="store_true")
+    uv.add_argument(
+        "--format",
+        choices=["text", "html", "json", "csv"],
+        default="text",
+        help="stdout format (default: text)",
+    )
+    uv.add_argument(
+        "--out",
+        metavar="DIR",
+        help="also write index.html + undervalued.{json,csv} into this directory",
+    )
     uv.set_defaults(func=cmd_undervalued)
 
     sm = sub.add_parser("smoke", help="run the full smoke chain (after `lti update`)")

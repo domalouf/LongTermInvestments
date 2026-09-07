@@ -116,9 +116,7 @@ def run_backtest(
             continue
 
         snap = metrics.add_fundamental_metrics(snap)
-        entry_prices = pd.Series(
-            {cik: prices_mod.price_on_or_before(price_panel, t, rd) for cik, t in snap["ticker"].items()}
-        )
+        entry_prices = prices_mod.prices_asof(price_panel, snap["ticker"], rd)
         mcap = entry_prices * snap.get("shares_outstanding", pd.Series(np.nan, index=snap.index))
         snap = metrics.add_price_metrics(snap, price=entry_prices, market_cap=mcap)
 

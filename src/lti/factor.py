@@ -99,9 +99,7 @@ def _prepare_snapshot(fund: pd.DataFrame, panel: pd.DataFrame, asof: pd.Timestam
         return snap
 
     snap = metrics_mod.add_fundamental_metrics(snap)
-    entry = pd.Series(
-        {cik: prices_mod.price_on_or_before(panel, t, asof) for cik, t in snap["ticker"].items()}
-    )
+    entry = prices_mod.prices_asof(panel, snap["ticker"], asof)
     shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else None
     mcap = entry * shares if shares is not None else None
     snap = metrics_mod.add_price_metrics(snap, price=entry, market_cap=mcap)

@@ -11,7 +11,7 @@ import gc
 import logging
 
 import lti.config as config
-from lti import sec_update, tickers
+from lti import rawtags, sec_update, sectors, tickers
 
 import numpy as np
 import pandas as pd
@@ -220,9 +220,26 @@ def build_fundamentals(smoke: bool = False, quarters: list[str] | None = None) -
     cik_map = tickers.get_cik_ticker_map()[["cik", "ticker", "tickers_all"]]
     merged = merged.merge(cik_map, on="cik", how="left")
 
+    # industry classification, for the financials / utilities exclusions
+    merged = merged.merge(rawtags.build_sic_map(), on="adsh", how="left")
+    merged = sectors.add_sector_columns(merged)
+
+    # debt / net fixed assets, which the standardizers don't emit
+    raw_bs = rawtags.build_raw_bs_tags().drop(columns=["ddate_raw"], errors="ignore")
+    merged = merged.merge(raw_bs, on="adsh", how="left")
+    merged = rawtags.add_debt_provenance(merged)
+
+    # EBIT as the filer tagged it, rather than as the standardizer derived it
+    merged = merged.merge(rawtags.build_raw_is_tags(), on="adsh", how="left")
+
     # convenience columns
     if "capex" in merged.columns and "cfo" in merged.columns:
         merged["free_cash_flow"] = merged["cfo"] - merged["capex"].abs()
+    if {"total_debt", "cash"} <= set(merged.columns):
+        # unknown debt stays unknown — treating it as zero would make leveraged
+        # companies look cheap, which is the exact error EV is meant to avoid.
+        # Unknown cash is taken as zero, which only ever inflates EV (conservative).
+        merged["net_debt"] = merged["total_debt"] - merged["cash"].fillna(0.0)
 
     merged = _add_prior_year(merged)
 

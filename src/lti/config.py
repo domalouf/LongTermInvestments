@@ -64,6 +64,9 @@ class Paths:
     derived_dir: Path
     fundamentals_parquet: Path
     cik_ticker_parquet: Path
+    sic_parquet: Path
+    raw_bs_tags_parquet: Path
+    raw_is_tags_parquet: Path
 
     # price cache
     prices_dir: Path
@@ -119,6 +122,9 @@ def get_paths() -> Paths:
         derived_dir=derived,
         fundamentals_parquet=derived / f"fundamentals{suffix}",
         cik_ticker_parquet=derived / "cik_ticker.parquet",
+        sic_parquet=derived / "sic_by_adsh.parquet",
+        raw_bs_tags_parquet=derived / "raw_bs_tags.parquet",
+        raw_is_tags_parquet=derived / "raw_is_tags.parquet",
         prices_dir=prices,
         adj_close_parquet=prices / "adj_close.parquet",
         prices_meta_parquet=prices / "_prices_meta.parquet",

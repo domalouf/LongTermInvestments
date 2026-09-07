@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from lti import sectors
 from lti.metrics import LOWER_IS_BETTER
 
 
@@ -38,9 +39,27 @@ def _apply_filters(snapshot: pd.DataFrame, filters: dict) -> pd.DataFrame:
         df = df[df["eps"] > 0]
     if filters.get("require_price") and "price" in df.columns:
         df = df[df["price"].notna()]
-    if filters.get("exclude_financials") and "sic" in df.columns:
-        df = df[~df["sic"].astype("string").str.startswith("6", na=False)]
+    if filters.get("exclude_financials"):
+        df = _drop_sector(df, "is_financial", sectors.is_financial)
+    if filters.get("exclude_utilities"):
+        df = _drop_sector(df, "is_utility", sectors.is_utility)
     return df
+
+
+def _drop_sector(df: pd.DataFrame, flag_col: str, classify) -> pd.DataFrame:
+    """Drop a sector, using the precomputed flag if present and ``sic`` otherwise.
+
+    Raises when neither is available: silently returning an unfiltered universe
+    would quietly answer a different question than the one that was asked.
+    """
+    if flag_col in df.columns:
+        return df[~df[flag_col].fillna(False).astype(bool)]
+    if "sic" in df.columns:
+        return df[~classify(df["sic"])]
+    raise KeyError(
+        f"cannot apply the {flag_col} filter: the snapshot has neither "
+        f"'{flag_col}' nor 'sic' — rebuild with `lti build-fundamentals`"
+    )
 
 
 def rank(snapshot: pd.DataFrame, spec: ScreenSpec) -> pd.DataFrame:

@@ -166,6 +166,81 @@ def fetch_prices(
     return panel
 
 
+def refresh_prices(
+    tickers: list[str] | None = None,
+    lookback_days: int = 7,
+    batch_size: int = 40,
+    pause: float = 1.0,
+) -> pd.DataFrame:
+    """Top up already-cached tickers with the last ``lookback_days`` of bars.
+
+    The cheap daily counterpart to :func:`fetch_prices`: it never adds new
+    tickers and only re-downloads a short recent window, overwriting the overlap
+    so recent dividend/split re-adjustments are picked up. Run ``fetch-prices``
+    (not this) after the universe grows.
+
+    ``tickers`` restricts the refresh to a subset; ``None`` refreshes every
+    ticker currently marked ``ok`` in the cache.
+    """
+    panel = _load_panel()
+    meta = _load_meta()
+    if panel.empty or meta.empty:
+        LOGGER.info("prices: cache empty; run `lti fetch-prices` first")
+        return panel
+
+    cached = meta.loc[meta["status"] == "ok", "ticker"].tolist()
+    if tickers is not None:
+        want = {t.upper().strip() for t in tickers if isinstance(t, str)}
+        cached = [t for t in cached if t in want]
+    cached = sorted(set(cached) & set(panel.columns))
+    if not cached:
+        LOGGER.info("prices: no cached tickers to refresh")
+        return panel
+
+    start = (pd.Timestamp.today().normalize() - pd.Timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+    LOGGER.info("prices: refreshing %d tickers from %s", len(cached), start)
+    meta_rows = {r["ticker"]: dict(r) for _, r in meta.iterrows()}
+
+    bar = _make_bar(total=len(cached), desc="refresh")
+    updated = 0
+    for i in range(0, len(cached), batch_size):
+        batch = cached[i : i + batch_size]
+        try:
+            close = _download(batch, start, None)
+        except Exception as exc:  # noqa: BLE001 - resumable, skip and move on
+            LOGGER.warning("prices: refresh batch failed (%s); skipping", exc)
+            _bar_advance(bar, len(batch))
+            continue
+
+        for t in batch:
+            series = close[t].dropna() if t in close.columns else pd.Series(dtype="float64")
+            if series.empty:
+                continue
+            new_idx = series.index.difference(panel.index)
+            if len(new_idx):
+                panel = panel.reindex(panel.index.union(new_idx))
+            panel.loc[series.index, t] = series
+            updated += 1
+            row = meta_rows.get(t, {"ticker": t, "status": "ok"})
+            last = pd.Timestamp(row["last_date"]) if row.get("last_date") is not None else None
+            row["last_date"] = series.index.max() if last is None or series.index.max() > last else last
+            row["rows"] = int(panel[t].notna().sum())
+            row["last_fetch"] = pd.Timestamp.utcnow()
+            meta_rows[t] = row
+
+        _save_panel(panel)
+        _save_meta(pd.DataFrame(meta_rows.values()))
+        _bar_advance(bar, len(batch), postfix=f"{updated} upd")
+        if pause and i + batch_size < len(cached):
+            time.sleep(pause)
+
+    _bar_close(bar)
+    _save_panel(panel)
+    _save_meta(pd.DataFrame(meta_rows.values()))
+    LOGGER.info("prices: refreshed %d/%d tickers", updated, len(cached))
+    return panel
+
+
 # --- reads --------------------------------------------------------------
 
 
@@ -190,6 +265,45 @@ def price_on_or_before(panel: pd.DataFrame, ticker: str, date: pd.Timestamp, win
     if (date - series.index[-1]).days > window_days:
         return None
     return float(series.iloc[-1])
+
+
+def prices_asof(
+    panel: pd.DataFrame,
+    tickers: "pd.Series | list[str]",
+    date: pd.Timestamp,
+    window_days: int = 7,
+) -> pd.Series:
+    """:func:`price_on_or_before` for many tickers at once.
+
+    Same answer, one vectorised pass instead of a Python loop per ticker — which
+    is the difference between a screener page that renders and one that appears
+    to hang, since every page prices the whole universe on load.
+
+    ``tickers`` may be a Series (the result keeps its index, so it aligns with a
+    snapshot indexed by cik) or a plain list (the result is indexed by ticker).
+    """
+    want = pd.Series(tickers) if not isinstance(tickers, pd.Series) else tickers
+    out = pd.Series(np.nan, index=want.index, dtype="float64")
+
+    sub = panel.loc[: pd.Timestamp(date)]
+    if sub.empty or panel.empty:
+        return out
+
+    arr = sub.to_numpy(dtype="float64", na_value=np.nan)
+    valid = ~np.isnan(arr)
+    any_valid = valid.any(axis=0)
+    # index of the last non-NaN row per column
+    last_row = valid.shape[0] - 1 - valid[::-1].argmax(axis=0)
+
+    cols = np.arange(arr.shape[1])
+    last_price = np.where(any_valid, arr[last_row, cols], np.nan)
+    index_ns = sub.index.to_numpy(dtype="datetime64[ns]")
+    age_days = (np.datetime64(pd.Timestamp(date), "ns") - index_ns[last_row]) / np.timedelta64(1, "D")
+    fresh = any_valid & (age_days <= window_days)
+
+    by_ticker = pd.Series(np.where(fresh, last_price, np.nan), index=sub.columns)
+    symbols = want.astype("string").str.upper()
+    return pd.Series(by_ticker.reindex(symbols).to_numpy(), index=want.index, dtype="float64")
 
 
 def forward_return(

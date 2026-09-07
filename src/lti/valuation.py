@@ -236,9 +236,7 @@ def rank_undervalued(
         return snap
 
     snap = metrics_mod.add_fundamental_metrics(snap)
-    price_at = pd.Series(
-        {cik: prices_mod.price_on_or_before(panel, t, asof) for cik, t in snap["ticker"].items()}
-    )
+    price_at = prices_mod.prices_asof(panel, snap["ticker"], asof)
     shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else None
     mcap = price_at * shares if shares is not None else None
     snap = metrics_mod.add_price_metrics(snap, price=price_at, market_cap=mcap)
