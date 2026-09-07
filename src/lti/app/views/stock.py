@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from lti import prices as prices_mod, stock as stock_mod
+from lti.app import theme
 
-st.set_page_config(page_title="Stock", page_icon="🔬", layout="wide")
-st.title("🔬 Stock detail")
+theme.header(
+    "🔬 Stock detail",
+    "One company's price, annual fundamentals and fair-value estimates. This is the page "
+    "to open before acting on anything the Undervalued screen turned up.",
+)
 
 
 @st.cache_data(show_spinner=False)
@@ -21,9 +23,14 @@ def _load_fund() -> pd.DataFrame:
     return load_fundamentals()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner="Fetching split history…")
 def _splits(symbol: str) -> pd.Series:
-    """Split history for one ticker from yfinance (cached; best-effort)."""
+    """Split history for one ticker from yfinance (cached; best-effort).
+
+    This is a live network call and can take ten seconds or simply fail when
+    Yahoo is unreachable, so it gets a spinner — without one the page looks
+    frozen on the first load of each ticker.
+    """
     try:
         import yfinance as yf
 
@@ -92,44 +99,71 @@ with price_tab:
         st.info("No price history cached for this ticker.")
     else:
         s = panel[psym].dropna()
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=s.index, y=s.values, name="Adj. close", line=dict(width=1.5)))
+        fig = go.Figure(
+            go.Scatter(
+                x=s.index, y=s.values, name="Adjusted close", mode="lines",
+                line=dict(width=2, color=theme.BLUE),
+                hovertemplate="$%{y:,.2f}<extra></extra>",
+            )
+        )
         if show_filings and not annual.empty:
             for d in annual["filed"].dropna():
-                fig.add_vline(x=d, line_width=1, line_dash="dot", line_color="rgba(128,128,128,0.4)")
-        fig.update_layout(
-            height=460, margin=dict(l=10, r=10, t=30, b=10),
-            yaxis_type="log" if log_price else "linear", yaxis_title="Adjusted close ($)",
+                fig.add_vline(x=d, line_width=1, line_color=theme.AXIS, layer="below")
+        theme.show(
+            fig, height=460, hovermode="x unified", legend=False,
+            yaxis=dict(type="log" if log_price else "linear", tickprefix="$",
+                       title="adjusted close"),
+            xaxis_title="",
         )
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption("Adjusted close (splits + dividends). Dotted lines mark 10-K filing dates.")
+        theme.note(
+            "Adjusted close, so splits and dividends are already in the line. "
+            "The vertical hairlines mark 10-K filing dates — the moments the fundamentals "
+            "on the other tabs actually became public."
+        )
 
 
-def _year_bar(df: pd.DataFrame, items: list[str], title: str):
+def _year_bar(df: pd.DataFrame, items: list[str], ylabel: str = "$B"):
+    """Grouped annual bars, one categorical slot per line item."""
     present = [c for c in items if c in df.columns and df[c].notna().any()]
     if not present:
         st.info("No data for this view.")
         return
     plot = df[["fiscal_year", *present]].copy()
-    plot[present] = plot[present] / 1e9
-    melted = plot.melt("fiscal_year", var_name="item", value_name="value")
-    fig = px.bar(melted, x="fiscal_year", y="value", color="item", barmode="group", title=title)
-    fig.update_layout(
-        height=420, margin=dict(l=10, r=10, t=40, b=10),
-        yaxis_title="$B", xaxis_title="", legend_title="",
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    fig = go.Figure()
+    for i, col in enumerate(present):
+        fig.add_trace(
+            go.Bar(
+                x=plot["fiscal_year"], y=plot[col] / 1e9, name=col.replace("_", " "),
+                marker_color=theme.SERIES[i % len(theme.SERIES)], marker_line_width=0,
+                marker_cornerradius=3,
+                hovertemplate=f"{col.replace('_', ' ')}<br>FY%{{x}}: $%{{y:,.2f}}B<extra></extra>",
+            )
+        )
+    fig.update_layout(barmode="group", bargap=0.28, bargroupgap=0.08)
+    theme.show(fig, height=400, yaxis_title=ylabel, xaxis=dict(title="", dtick=1))
 
 
 with income_tab:
     if annual.empty:
         st.info("No fundamentals for this ticker.")
     else:
-        _year_bar(annual, stock_mod.INCOME_ITEMS, "Income statement ($B)")
+        st.subheader("Income statement")
+        _year_bar(annual, stock_mod.INCOME_ITEMS)
         if "eps" in annual.columns and annual["eps"].notna().any():
-            fig = px.bar(annual, x="fiscal_year", y="eps", title="Reported EPS ($, as filed)")
-            fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), xaxis_title="", yaxis_title="$")
-            st.plotly_chart(fig, use_container_width=True)
+            st.subheader("Reported EPS")
+            fig = go.Figure(
+                go.Bar(x=annual["fiscal_year"], y=annual["eps"],
+                       hovertemplate="FY%{x}: $%{y:,.2f}<extra></extra>")
+            )
+            theme.bar_marks(fig)
+            theme.zero_line(fig, axis="y")
+            theme.show(fig, height=300, legend=False,
+                       yaxis=dict(tickprefix="$", title="EPS as filed"),
+                       xaxis=dict(title="", dtick=1))
+            theme.note(
+                "As filed, on the share count of the day — not restated for later splits. "
+                "The Valuation and Fair value tabs do restate it."
+            )
 
 with margin_tab:
     if annual.empty:
@@ -137,12 +171,25 @@ with margin_tab:
     else:
         present = [m for m in stock_mod.MARGIN_METRICS if m in annual.columns and annual[m].notna().any()]
         if present:
-            melted = annual[["fiscal_year", *present]].melt("fiscal_year", var_name="metric", value_name="value")
-            fig = px.line(melted, x="fiscal_year", y="value", color="metric", markers=True,
-                          title="Margins & return on equity")
-            fig.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10),
-                              yaxis_tickformat=".0%", xaxis_title="", legend_title="")
-            st.plotly_chart(fig, use_container_width=True)
+            st.subheader("Margins & return on equity")
+            fig = go.Figure()
+            for i, col in enumerate(present):
+                fig.add_trace(
+                    go.Scatter(
+                        x=annual["fiscal_year"], y=annual[col], name=col.replace("_", " "),
+                        mode="lines+markers", line=dict(width=2, color=theme.SERIES[i % len(theme.SERIES)]),
+                        marker=dict(size=8, line=dict(width=2, color=theme.SURFACE)),
+                        hovertemplate=f"{col.replace('_', ' ')}<br>FY%{{x}}: %{{y:.1%}}<extra></extra>",
+                    )
+                )
+            theme.zero_line(fig, axis="y")
+            theme.show(fig, height=420, hovermode="x unified",
+                       yaxis=dict(tickformat=".0%", title=""), xaxis=dict(title="", dtick=1))
+            theme.note(
+                "Gross margin is unreliable here: the SEC standardizer sets it equal to revenue "
+                "whenever it can't find a cost-of-revenue line. A flat 100% means missing data, "
+                "not a perfect business."
+            )
         else:
             st.info("No margin metrics available.")
 
@@ -150,20 +197,32 @@ with bs_tab:
     if annual.empty:
         st.info("No fundamentals for this ticker.")
     else:
-        _year_bar(annual, stock_mod.BALANCE_ITEMS, "Balance sheet ($B)")
+        st.subheader("Balance sheet")
+        _year_bar(annual, stock_mod.BALANCE_ITEMS)
         if "debt_to_equity" in annual.columns and annual["debt_to_equity"].notna().any():
-            fig = px.line(annual, x="fiscal_year", y="debt_to_equity", markers=True,
-                          title="Liabilities / equity")
-            fig.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), xaxis_title="", yaxis_title="×")
-            st.plotly_chart(fig, use_container_width=True)
+            st.subheader("Liabilities ÷ equity")
+            fig = go.Figure(
+                go.Scatter(
+                    x=annual["fiscal_year"], y=annual["debt_to_equity"], mode="lines+markers",
+                    line=dict(width=2, color=theme.BLUE),
+                    marker=dict(size=8, line=dict(width=2, color=theme.SURFACE)),
+                    hovertemplate="FY%{x}: %{y:.2f}×<extra></extra>",
+                )
+            )
+            theme.show(fig, height=300, legend=False,
+                       yaxis=dict(ticksuffix="×", title=""), xaxis=dict(title="", dtick=1))
+            theme.note("Total liabilities, not just interest-bearing debt — see the README.")
 
 with cf_tab:
     if annual.empty:
         st.info("No fundamentals for this ticker.")
     else:
-        _year_bar(annual, stock_mod.CASHFLOW_ITEMS, "Cash flow ($B)")
-        st.caption("`cfo` operating cash flow · `capex` capital expenditure (as reported) · "
-                   "`free_cash_flow` = cfo − |capex|.")
+        st.subheader("Cash flow")
+        _year_bar(annual, stock_mod.CASHFLOW_ITEMS)
+        theme.note(
+            "<code>cfo</code> operating cash flow · <code>capex</code> capital expenditure "
+            "(as reported) · <code>free_cash_flow</code> = cfo − |capex|."
+        )
 
 with val_tab:
     val = stock_mod.valuation_history(annual, panel, psym or "", splits=splits) if psym else pd.DataFrame()
@@ -171,20 +230,37 @@ with val_tab:
         st.info("Valuation history needs both cached prices and fundamentals with EPS / book value.")
     else:
         if splits.empty and psym:
-            st.caption("No split history loaded — P/E and P/B are distorted across any stock split.")
+            theme.note(
+                "No split history loaded (Yahoo unreachable, or the company never split). "
+                "If it did split, the P/E and P/B below jump at the split date and the level "
+                "before it is wrong."
+            )
         for col, label in [("pe", "Price / earnings"), ("pb", "Price / book")]:
             if col not in val.columns or not val[col].notna().any():
                 continue
             v = val.dropna(subset=[col])
             med = v[col].median()
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=v["date"], y=v[col], name=label, line=dict(width=1.5)))
-            fig.add_hline(y=med, line_dash="dash", annotation_text=f"median {med:.1f}")
-            fig.update_layout(height=340, margin=dict(l=10, r=10, t=30, b=10), title=label, yaxis_title="×")
-            st.plotly_chart(fig, use_container_width=True)
-        st.caption("Trailing multiple: price on each date ÷ the EPS / book value from the most "
-                   "recent 10-K as of that date, restated to today's share count. Negative-earnings "
-                   "stretches are dropped from P/E.")
+            st.subheader(label)
+            fig = go.Figure(
+                go.Scatter(
+                    x=v["date"], y=v[col], name=label, mode="lines",
+                    line=dict(width=2, color=theme.BLUE),
+                    hovertemplate="%{y:.1f}×<extra></extra>",
+                )
+            )
+            fig.add_hline(y=med, line_width=1.5, line_color=theme.MUTED)
+            fig.add_annotation(
+                x=1.0, xref="paper", y=med, yanchor="bottom", xanchor="right",
+                text=f"median {med:.1f}×", showarrow=False,
+                font=dict(size=10.5, color=theme.MUTED),
+            )
+            theme.show(fig, height=330, legend=False, hovermode="x unified",
+                       yaxis=dict(ticksuffix="×", title=""), xaxis_title="")
+        theme.note(
+            "Trailing multiple: price on each date ÷ the EPS or book value from the most recent "
+            "10-K as of that date, restated onto today's share count. Stretches of negative "
+            "earnings are dropped from P/E rather than plotted as meaningless negatives."
+        )
 
 with fv_tab:
     from lti.valuation import MODELS, ValuationAssumptions, add_valuation_models, historical_cagr
@@ -248,18 +324,41 @@ with fv_tab:
             m2.metric("Blended fair value", f"${row['fair_value_est']:,.2f}")
             m3.metric("Upside to fair value", f"{row['fair_value_est_upside']:.0%}")
 
-            bars = pd.DataFrame(
-                {"model": present + ["blended"],
-                 "fair_value": [row[m] for m in present] + [row["fair_value_est"]]}
+            st.subheader("Estimated fair value per share")
+            names = present + ["blended"]
+            amounts = [float(row[m]) for m in present] + [float(row["fair_value_est"])]
+            order = sorted(range(len(names)), key=lambda i: amounts[i])
+            names = [names[i].replace("_", " ") for i in order]
+            amounts = [amounts[i] for i in order]
+
+            fig = go.Figure(
+                go.Bar(
+                    x=amounts, y=names, orientation="h",
+                    text=[f"${v:,.2f}" for v in amounts],
+                    textposition="outside", cliponaxis=False,
+                    textfont=dict(color=theme.INK_2, size=11),
+                    marker_color=[theme.POS if v >= cur_price else theme.NEG for v in amounts],
+                    hovertemplate="%{y}<br>$%{x:,.2f} per share<extra></extra>",
+                )
             )
-            fig = px.bar(bars, x="fair_value", y="model", orientation="h", text="fair_value",
-                         title="Estimated fair value per share")
-            fig.update_traces(texttemplate="$%{text:,.2f}", textposition="outside", cliponaxis=False)
-            fig.add_vline(x=cur_price, line_dash="dash", line_color="crimson",
-                          annotation_text=f"price ${cur_price:,.2f}", annotation_position="top")
-            fig.update_layout(height=360, margin=dict(l=10, r=10, t=40, b=10),
-                              xaxis_title="", yaxis_title="")
-            st.plotly_chart(fig, use_container_width=True)
+            fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+            fig.update_layout(bargap=0.4)
+            fig.add_vline(x=cur_price, line_width=1.5, line_color=theme.INK_2)
+            fig.add_annotation(
+                x=cur_price, y=1.0, yref="paper", yanchor="bottom", xanchor="left",
+                text=f"  price ${cur_price:,.2f}", showarrow=False,
+                font=dict(size=11, color=theme.INK_2),
+            )
+            theme.show(
+                fig, height=max(300, 40 * len(names) + 80), legend=False,
+                xaxis=dict(tickprefix="$", title="fair value per share", rangemode="tozero",
+                           range=[0, max(max(amounts), cur_price) * 1.22]),
+                yaxis_title="",
+            )
+            theme.note(
+                "Blue bars sit above today's price, red below. The spread between models "
+                "<i>is</i> the uncertainty — a tight cluster is worth more than a high median."
+            )
 
             table = pd.DataFrame(
                 {
@@ -270,7 +369,7 @@ with fv_tab:
             )
             st.dataframe(
                 table.style.format({"fair_value": "${:,.2f}", "upside_vs_price": "{:+.0%}"}),
-                hide_index=True, use_container_width=True,
+                hide_index=True, width="stretch",
             )
             g_used = row.get("est_growth")
             dy_used = row.get("dividend_yield")
@@ -290,7 +389,7 @@ with raw_tab:
         st.info("No fundamentals for this ticker.")
     else:
         show = annual.drop(columns=[c for c in ["tickers_all", "adsh", "form"] if c in annual.columns])
-        st.dataframe(show, hide_index=True, use_container_width=True)
+        st.dataframe(show, hide_index=True, width="stretch")
         st.download_button(
             "Download annual fundamentals CSV",
             annual.to_csv(index=False).encode(),

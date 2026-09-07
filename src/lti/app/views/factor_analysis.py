@@ -12,19 +12,21 @@ from __future__ import annotations
 import json
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from lti.app import theme
 from lti.factor import ALL_METRICS, ICConfig, compute_ic
 
-st.set_page_config(page_title="Factor Analysis", page_icon="📐", layout="wide")
-st.title("📐 Factor analysis")
-st.caption(
-    "Cross-sectional Information Coefficient (IC): on each as-of date, the rank "
-    "correlation across stocks between a metric and its forward return. "
-    "**Negative mean IC** ⇒ lower values of the metric went with higher returns "
-    "(expected for `pe`, `pb`, `debt_to_equity`)."
+theme.header(
+    "📐 Factor analysis",
+    "On each as-of date, the rank correlation across stocks between a metric and its "
+    "forward return — the Information Coefficient. Averaging per-date ICs separates "
+    "stock-picking signal from market direction.",
+    "A <b>negative</b> mean IC means <i>lower</i> values of the metric went with higher returns — "
+    "which is what you want to see for <code>pe</code>, <code>pb</code> and <code>debt_to_equity</code>. "
+    "This page has far more statistical power than the Backtest page: thousands of names per "
+    "date rather than a dozen annual portfolio returns.",
 )
 
 
@@ -108,43 +110,81 @@ st.dataframe(
         na_rep="—",
     ),
     hide_index=True,
-    use_container_width=True,
+    width="stretch",
 )
 
-fig = px.bar(
-    summary.reset_index(names="metric"),
-    x="mean_ic", y="metric", orientation="h",
-    color="mean_ic", color_continuous_scale="RdBu", range_color=[-0.15, 0.15],
-    title="Mean IC (further from zero = stronger ranking signal)",
+st.header("Mean IC by metric")
+theme.note(
+    "Further from zero is a stronger ranking signal; the sign says which direction. "
+    "Blue bars point the way theory expects for a value metric, red against it."
 )
-fig.update_layout(height=380, margin=dict(l=10, r=10, t=40, b=10), yaxis={"categoryorder": "total ascending"})
-st.plotly_chart(fig, use_container_width=True)
+ms = summary.reset_index(names="metric").sort_values("mean_ic")
+fig = go.Figure(
+    go.Bar(
+        x=ms["mean_ic"], y=ms["metric"], orientation="h",
+        marker_color=[theme.NEG if v >= 0 else theme.POS for v in ms["mean_ic"]],
+        customdata=ms[["t_stat", "n_periods"]].to_numpy(),
+        hovertemplate="<b>%{y}</b><br>mean IC %{x:.3f}<br>t %{customdata[0]:.2f} over %{customdata[1]:.0f} periods<extra></extra>",
+    )
+)
+fig.update_traces(marker_line_width=0, marker_cornerradius=4)
+fig.update_layout(bargap=0.34)
+theme.zero_line(fig, axis="x")
+theme.show(fig, height=max(320, 26 * len(ms) + 70), legend=False,
+           xaxis_title="mean information coefficient", yaxis_title="")
 
-st.subheader("IC over time")
+st.header("IC over time")
+theme.note(
+    "A metric worth trusting is one whose sign is stable across periods, not one big year. "
+    "Compare the bars against the mean line."
+)
 focus = st.selectbox("Metric", list(ic_by_period.columns), key="ic_focus")
 series = ic_by_period[focus].dropna()
 if series.empty:
     st.info("No usable periods for this metric.")
 else:
-    bar = go.Figure()
-    bar.add_trace(go.Bar(x=series.index, y=series.values, marker_color=["#c0392b" if v < 0 else "#2c7fb8" for v in series.values]))
-    bar.add_hline(y=series.mean(), line_dash="dash", annotation_text=f"mean {series.mean():.3f}")
-    bar.update_layout(height=320, margin=dict(l=10, r=10, t=30, b=10), title=f"{focus} — per-period IC")
-    st.plotly_chart(bar, use_container_width=True)
+    bar = go.Figure(
+        go.Bar(
+            x=series.index, y=series.values,
+            marker_color=[theme.NEG if v >= 0 else theme.POS for v in series.values],
+            hovertemplate="%{x|%b %Y}<br>IC %{y:.3f}<extra></extra>",
+        )
+    )
+    bar.update_traces(marker_line_width=0, marker_cornerradius=4)
+    bar.update_layout(bargap=0.34)
+    theme.zero_line(bar, axis="y")
+    bar.add_hline(y=series.mean(), line_width=1.5, line_color=theme.INK_2)
+    bar.add_annotation(
+        x=1.0, xref="paper", y=series.mean(), yanchor="bottom", xanchor="right",
+        text=f"mean {series.mean():.3f}", showarrow=False,
+        font=dict(size=10.5, color=theme.INK_2),
+    )
+    theme.show(bar, height=330, legend=False, yaxis_title=f"{focus} IC", xaxis_title="")
 
-st.subheader("Mean forward return by metric quantile")
-st.caption("Q1 = lowest metric value, Qn = highest. A monotonic staircase means the metric ranks returns cleanly.")
+st.header("Forward return by metric quantile")
+theme.note(
+    "Q1 is the lowest metric value, Qn the highest. A clean staircase means the metric "
+    "separates winners from losers across its whole range, not just at one extreme."
+)
 if bucket_returns.empty:
     st.info("Not enough cross-sectional breadth to form quantile buckets.")
 else:
     bfocus = st.selectbox("Metric", list(bucket_returns.index), key="bucket_focus")
     row = bucket_returns.loc[bfocus].dropna()
-    bfig = px.bar(x=row.index, y=row.values, title=f"{bfocus} — forward return by bucket", labels={"x": "quantile", "y": "mean forward return"})
-    bfig.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10), yaxis_tickformat=".1%")
-    st.plotly_chart(bfig, use_container_width=True)
+    bfig = go.Figure(
+        go.Bar(
+            x=list(row.index), y=row.values,
+            hovertemplate="%{x}<br>mean forward return %{y:.1%}<extra></extra>",
+        )
+    )
+    theme.bar_marks(bfig)
+    theme.zero_line(bfig, axis="y")
+    theme.show(bfig, height=330, legend=False,
+               yaxis=dict(tickformat=".1%", title="mean forward return"),
+               xaxis_title=f"{bfocus} quantile")
 
 with st.expander("IC by period (table)"):
-    st.dataframe(ic_by_period.round(3), use_container_width=True)
+    st.dataframe(ic_by_period.round(3), width="stretch")
     st.download_button("Download IC-by-period CSV", ic_by_period.to_csv().encode(), "ic_by_period.csv", "text/csv")
 
 if warnings:

@@ -1,0 +1,25 @@
+# Streamlit config for the LongTermInvestments GUI.
+#
+# Committed so both `streamlit run src/lti/app/Home.py` in dev and
+# deploy/lti-streamlit.service pick it up. The deployed GUI is private: it is
+# reached only through a Cloudflare Tunnel + Cloudflare Access on
+# invest.domalouf.com (see deploy/README.md), so the server binds loopback only
+# and does its own auth for nothing.
+
+[server]
+headless = true          # don't open a browser / prompt for an email on start
+address = "127.0.0.1"    # never bind a public interface — the tunnel is the only way in
+port = 8501
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+# Kept in step with src/lti/app/theme.py — backgroundColor is the surface the
+# chart palette was validated against, so change the two together.
+base = "dark"
+primaryColor = "#3987e5"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#161a22"
+textColor = "#e9e9e6"
+font = "sans serif"
