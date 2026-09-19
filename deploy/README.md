@@ -33,9 +33,13 @@ only static HTML/JSON/CSV is copied to the Pi.
 
 ```bash
 ssh pi 'mkdir -p ~/HealthBoard/piStuff/website/invest'
-# keep `git pull --ff-only` deploys clean — the snapshot is not in git:
-ssh pi 'cd ~/HealthBoard && grep -qxF "piStuff/website/invest/" .gitignore || echo "piStuff/website/invest/" >> .gitignore'
 ```
+
+The snapshot isn't in git. To keep the Pi's checkout clean, add
+`piStuff/website/invest/` to HealthBoard's `.gitignore` next to the `blackjack/`,
+`zombies/` and `v2/` entries — commit and push it, then `git pull --ff-only` on the
+Pi. Don't append to `.gitignore` on the Pi itself: that dirties a tracked file, and
+the next pull that changes `.gitignore` refuses to run.
 
 `piStuff/website/` is the nginx web root (bind-mounted to `/usr/share/nginx/html`
 by `piStuff/docker-compose.yml`), so `https://domalouf.com/invest/` serves
@@ -90,6 +94,7 @@ Set these as `Environment=` lines in `~/.config/systemd/user/lti-undervalued.ser
 | `LTI_PI_DEST` | `pi:HealthBoard/piStuff/website/invest/` | rsync target |
 | `LTI_UNDERVALUED_ARGS` | — | extra `lti undervalued` flags, e.g. `--min-models 4 --market-cap-min 2000` |
 | `LTI_SKIP_PRICES` | — | `1` to skip the price refresh |
+| `LTI_TRACK_BACKUP` | `pi:lti-track/` in the shipped unit | where to copy `data/track/` after each record; unset, it stays on this machine only |
 
 Schedule lives in the `.timer` (`OnCalendar=*-*-* 07:30:00 UTC`, `Persistent=true`
 so a missed night runs at next boot).
