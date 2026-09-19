@@ -75,6 +75,12 @@ lti undervalued --top 30 --market-cap-min 2000 --min-profit-years 4
 #     --format html|json|csv  prints that instead of a table
 #     --out DIR               writes index.html + undervalued.{json,csv} (the public snapshot)
 
+# 4d. Keep score going forward (see "Track record" below)
+lti track-record                 # write down what each tracked strategy holds today (the nightly job does)
+lti track-report                 # how the records have done since
+lti journal-add AAPL buy --thesis "why" --change-my-mind "what would prove it wrong"
+lti journal                      # every logged decision and how it has aged
+
 # 5. GUI (see "GUI" section below)
 streamlit run src/lti/app/Home.py
 ```
@@ -146,7 +152,8 @@ streamlit run src/lti/app/Home.py          # opens http://localhost:8501
 
 **Undervalued today is the landing page.** The sidebar groups the rest by what you're
 there to do: *Find something to buy* (Undervalued, Stock detail), *Test an idea*
-(Screener, Backtest, Factor analysis) and *Housekeeping* (Data health). Leave
+(Screener, Backtest, Factor analysis), *Keep score* (Track record, Decision journal)
+and *Housekeeping* (Data health). Leave
 `LTI_SMOKE` unset to use the full `fundamentals.parquet`.
 
 `Home.py` is only the entry point — it sets the page config, applies the shared
@@ -356,6 +363,39 @@ says so. Also on the CLI as `lti undervalued`; with `--out DIR` it writes a self
 `index.html` + `undervalued.{json,csv}`, which `deploy/` publishes nightly to
 `domalouf.com/invest/` as the public daily list.
 
+### 📒 Track record — the only test free of hindsight
+Every backtest here runs on a survivor-only universe, and every idea in this project was
+chosen after looking at the same fifteen years. The future is the one clean test, so
+`lti track-record` — run by the nightly job — writes down what each tracked strategy
+holds that day, once, never revised: one parquet file per day in `data/track/records/`,
+with a JSON sidecar recording the parameters and the git commit that made it. It won't
+record a day more than a week old — the price cache holds only companies still trading,
+so a backdated record would quietly drop the ones that failed in between. The page
+(and `lti track-report`) then measures what each day's holdings returned over the next
+1, 3, 6 and 12 months — bought at the next day's close, since the list is made after the
+market shuts — against SPY and against the whole universe recorded the same day, plus a
+monthly-rebalanced paper portfolio for each. Companies later acquired or
+delisted stay in the record at their last price, so it has no survivorship bias. Returns
+come from the current total-return prices, not prices stored at the time.
+
+Tracked, fixed in `lti.track.STRATEGIES`: the **Undervalued list** (what's published);
+the factor study's **final screen**, top 30 (does its 2019–25 shortfall persist?); two
+ideas the study suggested but couldn't test — **no heavy diluters** (the universe without
+its top tenth by share issuance) and **cash returners** (top fifth by shareholder yield);
+**quality + value** (top fifth); and the **universe** itself as the yardstick
+($1B+, operating companies, financials and BDCs out, equal-weighted). Give it a year
+before reading anything into it — the page shows a Newey-West t for how far each gap is
+from luck. Set `LTI_TRACK_BACKUP` for the nightly job to keep a copy off the machine: a
+record can't be rebuilt after the fact.
+
+### ✍️ Decision journal
+Log each decision — buy, add, trim, sell, watch, pass — with why, what would change your
+mind, a fair value and conviction if you have them, and a review date (default a year
+on); the page has a form, the CLI `lti journal-add`. Every decision is scored against
+SPY from its date: a buy is right so far if the stock has beaten the market since, a sell
+or pass if it has lagged. Entries are append-only (`data/track/journal.jsonl`); a later
+look is a `review` entry pointing at the original, and the page flags reviews that are due.
+
 ### Intrinsic-value models (`lti.valuation`)
 `add_valuation_models()` turns a fundamentals snapshot + price into a fair value per
 share for each of: **two-stage DCF** (FCF/share grown at the estimated rate for N years
@@ -405,17 +445,20 @@ src/lti/
   cli.py           `lti` command-line entry point
   factor.py        cross-sectional IC of each metric (and composites) vs forward return, Newey-West t
   study.py         the pre-registered factor test: hypotheses fixed in code, 2011-18 chooses, 2019-25 judges
+  track.py         the forward track record: append-only daily holdings of each strategy, scored later
+  journal.py       the decision journal: append-only decisions, each scored against SPY since
   stock.py         one company's annual fundamentals + valuation time series
   app/             Streamlit UI
     Home.py        entry point: page config, theme, navigation
     theme.py       palette + Plotly chrome + page furniture (import this, not raw styling)
-    views/         Undervalued, Stock, Screener, Backtest, Factor analysis, Data health
+    views/         Undervalued, Stock, Screener, Backtest, Factor analysis, Track record, Journal, Data health
 deploy/            nightly publish of the public "undervalued today" snapshot (see deploy/README.md)
 tests/             pure-logic unit tests (no network / SEC data)
 ```
 
 `data/` (gitignored) holds everything generated: `data/sec/` (secfsdstools),
-`data/derived/` (fundamentals, ticker map), `data/prices/` (price panels + split history).
+`data/derived/` (fundamentals, ticker map), `data/prices/` (price panels + split history),
+`data/track/` (the track record and the decision journal — the one part that can't be rebuilt).
 
 ## Known limitations / v2 ideas
 

@@ -222,6 +222,86 @@ def cmd_factor_study(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_track_record(args: argparse.Namespace) -> None:
+    from lti import track
+
+    try:
+        rows = track.record(args.asof, force=args.force)
+    except ValueError as exc:
+        raise SystemExit(f"lti track-record: {exc}") from None
+    if rows is None:
+        print("already on record for that day — nothing written")
+        return
+    counts = rows.groupby("strategy").size()
+    print(f"recorded {rows['record_date'].iloc[0].date()}: " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+
+
+def cmd_track_report(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import track
+
+    records = track.load_records()
+    if records.empty:
+        print("nothing on record yet — run `lti track-record` (the nightly job does)")
+        return
+    days = records["record_date"].drop_duplicates().sort_values()
+    print(f"\n=== forward track record: {len(days)} day(s), {days.iloc[0].date()} to {days.iloc[-1].date()} ===")
+    for s in track.STRATEGIES:
+        print(f"  {s.label:<30} {s.why}")
+    summary = track.summary(track.performance(records))
+    if summary.empty:
+        print("\nno record has reached its first horizon (1 month) yet — check back later.")
+        return
+    shown = summary.copy()
+    for c in ("ret", "vs_universe", "vs_spy", "beat_universe"):
+        fmt = "{:.0%}" if c == "beat_universe" else "{:+.1%}"
+        shown[c] = shown[c].map(lambda v, fmt=fmt: fmt.format(v) if pd.notna(v) else "—")
+    shown["t_vs_universe"] = shown["t_vs_universe"].map(lambda v: f"{v:+.1f}" if pd.notna(v) else "—")
+    print("\nby horizon (months): average return, gap to the same-day universe and to SPY")
+    print(shown.to_string(index=False))
+    curves = track.paper_curves(records)
+    if len(curves) > 1:
+        print("\nfollowing each strategy, rebalancing monthly, $1 grew to:")
+        print(curves.iloc[-1].round(3).to_string())
+
+
+def cmd_journal_add(args: argparse.Namespace) -> None:
+    from lti import journal
+
+    try:
+        entry = journal.add_entry(
+            args.ticker, args.action, args.thesis,
+            change_my_mind=args.change_my_mind or "", fair_value=args.fair_value, conviction=args.conviction,
+            review_by=args.review_by, refers_to=args.refers_to, date=args.date,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"lti journal-add: {exc}") from None
+    print(f"logged {entry['id']}: {entry['action']} {entry['ticker']} at ${entry['price']:,.2f}, review by {entry['review_by']}")
+
+
+def cmd_journal(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import journal
+
+    out = journal.outcomes()
+    if out.empty:
+        print("the journal is empty — `lti journal-add TICKER ACTION --thesis ...`")
+        return
+    view = out[["id", "date", "ticker", "action", "price", "price_now", "since", "spy_since", "vs_spy",
+                "right_so_far", "review_due", "thesis"]].copy()
+    view["date"] = view["date"].dt.date
+    for c in ("since", "spy_since", "vs_spy"):
+        view[c] = view[c].map(lambda v: f"{v:+.1%}" if pd.notna(v) else "—")
+    view["right_so_far"] = view["right_so_far"].map({1.0: "yes", 0.0: "no"}).fillna("")
+    view["review_due"] = view["review_due"].map({True: "DUE", False: ""})
+    print(view.to_string(index=False, max_colwidth=50))
+    scored = out["right_so_far"].dropna()
+    if len(scored):
+        print(f"\n{int(scored.sum())} of {len(scored)} scored decisions look right so far (against SPY).")
+
+
 def cmd_undervalued(args: argparse.Namespace) -> None:
     import pandas as pd
 
@@ -394,6 +474,30 @@ def build_parser() -> argparse.ArgumentParser:
     fs.add_argument("--top-n", type=int, default=30, help="names the final screen's backtest holds")
     fs.add_argument("--no-month-spread", action="store_true", help="skip the 12-month rebalance spread")
     fs.set_defaults(func=cmd_factor_study)
+
+    tr = sub.add_parser("track-record", help="record today's holdings for every tracked strategy (once a day)")
+    tr.add_argument("--asof", default=None,
+                    help="date (default: the latest close in the price cache; at most a week before it)")
+    tr.add_argument("--force", action="store_true", help="redo a record made earlier the same day by mistake")
+    tr.set_defaults(func=cmd_track_record)
+
+    trr = sub.add_parser("track-report", help="how the recorded strategies have done since")
+    trr.set_defaults(func=cmd_track_report)
+
+    ja = sub.add_parser("journal-add", help="log a decision in the decision journal")
+    ja.add_argument("ticker")
+    ja.add_argument("action", help="buy, add, trim, sell, watch, pass or review")
+    ja.add_argument("--thesis", required=True, help="why — the point of the journal")
+    ja.add_argument("--change-my-mind", help="what would prove this wrong")
+    ja.add_argument("--fair-value", type=float, help="your estimate, per share")
+    ja.add_argument("--conviction", type=int, help="1 (low) to 5 (high)")
+    ja.add_argument("--review-by", help="date to look again (default: a year on)")
+    ja.add_argument("--refers-to", help="for a review: the id of the decision it looks back on")
+    ja.add_argument("--date", help="date of the decision (default: the latest close)")
+    ja.set_defaults(func=cmd_journal_add)
+
+    jl = sub.add_parser("journal", help="every logged decision and what the stock did since")
+    jl.set_defaults(func=cmd_journal)
 
     uv = sub.add_parser("undervalued", help="most undervalued names by blended intrinsic value")
     uv.add_argument("--asof", default=None, help="date (default today)")

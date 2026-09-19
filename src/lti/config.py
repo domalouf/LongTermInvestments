@@ -76,6 +76,11 @@ class Paths:
     splits_parquet: Path
     prices_meta_parquet: Path
 
+    # forward track record + decision journal (append-only)
+    track_dir: Path
+    track_records_dir: Path
+    journal_jsonl: Path
+
     def all_dirs(self) -> list[Path]:
         return [
             self.sec_dld,
@@ -84,6 +89,7 @@ class Paths:
             self.sec_automated,
             self.derived_dir,
             self.prices_dir,
+            self.track_records_dir,
         ]
 
 
@@ -110,6 +116,7 @@ def get_paths() -> Paths:
     concat_std = automated / "_2_all" / "_3_standardized_by_stmt"
     derived = root / "data" / "derived"
     prices = root / "data" / "prices"
+    track = root / "data" / "track"
 
     suffix = ".smoke.parquet" if is_smoke() else ".parquet"
 
@@ -134,6 +141,9 @@ def get_paths() -> Paths:
         close_parquet=prices / "close.parquet",
         splits_parquet=prices / "splits.parquet",
         prices_meta_parquet=prices / "_prices_meta.parquet",
+        track_dir=track,
+        track_records_dir=track / "records",
+        journal_jsonl=track / "journal.jsonl",
     )
 
 

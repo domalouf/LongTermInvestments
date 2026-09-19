@@ -15,15 +15,19 @@ only static HTML/JSON/CSV is copied to the Pi.
 
 ## Nightly public snapshot
 
-`publish-undervalued.sh` does three things:
+`publish-undervalued.sh` does four things:
 
 1. `lti refresh-prices` — tops up the price cache with the last few days of bars
    and re-fetches in full any ticker that split or paid a dividend since the last
    run (cheap; `fetch-prices` is only needed after the universe grows, or once to
    backfill a cache built before `close.parquet` existed).
-2. `lti undervalued --out build/invest` — regenerates `index.html`,
+2. `lti track-record` — writes down what each tracked strategy holds today
+   (`data/track/records/<date>.parquet`, append-only; see the Track record page).
+   A failure is logged, not fatal. Set `LTI_TRACK_BACKUP` to an rsync destination
+   to keep a copy off this machine — the record can't be rebuilt after the fact.
+3. `lti undervalued --out build/invest` — regenerates `index.html`,
    `undervalued.json`, `undervalued.csv`.
-3. `rsync` those to the Pi.
+4. `rsync` those to the Pi.
 
 ### One-time setup — on the Pi
 

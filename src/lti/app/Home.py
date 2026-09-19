@@ -31,6 +31,10 @@ nav = st.navigation(
             st.Page("views/backtest.py", title="Backtest", icon="🧪"),
             st.Page("views/factor_analysis.py", title="Factor analysis", icon="📐"),
         ],
+        "Keep score": [
+            st.Page("views/track.py", title="Track record", icon="📒"),
+            st.Page("views/journal.py", title="Decision journal", icon="✍️"),
+        ],
         "Housekeeping": [
             st.Page("views/data_health.py", title="Data health", icon="🩺"),
         ],
