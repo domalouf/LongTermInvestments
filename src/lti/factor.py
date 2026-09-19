@@ -20,12 +20,12 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from lti import pit, prices as prices_mod
-from lti.metrics import FUNDAMENTAL_METRICS, PRICE_METRICS
+from lti import metrics, pit, prices as prices_mod
+from lti.metrics import FUNDAMENTAL_METRICS, HISTORY_METRICS, PRICE_METRICS, VALUATION_METRICS
 
 LOGGER = logging.getLogger(__name__)
 
-ALL_METRICS: list[str] = FUNDAMENTAL_METRICS + PRICE_METRICS
+ALL_METRICS: list[str] = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
 
 
 @dataclass
@@ -94,7 +94,9 @@ def _bucket_means(metric: pd.Series, fwd: pd.Series, q: int) -> pd.Series | None
 
 
 def _prepare_snapshot(fund: pd.DataFrame, px: prices_mod.PriceData, asof: pd.Timestamp, cfg: ICConfig) -> pd.DataFrame:
-    snap = pit.priced_snapshot(fund, asof, px, operating_only=cfg.operating_only)
+    snap = pit.priced_snapshot(
+        fund, asof, px, operating_only=cfg.operating_only, with_history=metrics.needs_history(cfg.metrics)
+    )
     if snap.empty:
         return snap
 

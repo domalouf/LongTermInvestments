@@ -12,7 +12,7 @@
 #   LTI_PI_DEST      rsync destination             (default: pi:HealthBoard/piStuff/website/invest/)
 #   LTI_TOP_N        rows to publish               (default: 40)
 #   LTI_SKIP_PRICES  set to 1 to skip the price refresh
-#   LTI_UNDERVALUED_ARGS  extra flags for `lti undervalued` (e.g. "--min-models 4")
+#   LTI_UNDERVALUED_ARGS  extra flags for `lti undervalued` (e.g. "--min-profit-years 5")
 #
 set -euo pipefail
 

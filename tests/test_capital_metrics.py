@@ -391,6 +391,16 @@ def test_exclude_financials_and_utilities():
     assert ranking.select(_screen_frame(), spec) == ["MFG"]
 
 
+def test_excluding_financials_also_drops_investment_companies():
+    """BDCs (Ares Capital, FS KKR) have no SIC at all, so the SIC test alone misses them."""
+    df = pd.concat([_screen_frame(), pd.DataFrame(
+        {"ticker": ["ARCC"], "sic": [np.nan], "is_financial": [False], "is_utility": [False],
+         "ebit_ev": [0.50], "roic": [0.95]}, index=[4])])
+    spec = ScreenSpec(metrics=["ebit_ev", "roic"], top_n=10, filters={"exclude_financials": True})
+    assert ranking.select(df, spec) == ["UTIL", "MFG"]
+    assert list(sectors.is_investment_company(df["sic"])) == [False, False, False, True]
+
+
 def test_exclusions_fall_back_to_raw_sic():
     df = _screen_frame().drop(columns=["is_financial", "is_utility"])
     spec = ScreenSpec(

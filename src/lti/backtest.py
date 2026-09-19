@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from lti import pit, prices as prices_mod, ranking
+from lti import metrics, pit, prices as prices_mod, ranking
 from lti.performance import summarize
 from lti.ranking import ScreenSpec
 
@@ -124,6 +124,8 @@ def run_backtest(
         cfg.screen,
         filters={**cfg.screen.filters, "market_cap_min": cfg.market_cap_min, "require_price": True},
     )
+    # several years of history only when a metric or filter needs it — it costs a pass per date
+    with_history = metrics.needs_history([*spec.metrics, *(k for k, v in spec.filters.items() if v is not None)])
 
     port_value = bench_value = univ_value = cfg.initial_capital
     equity_segments = [pd.Series({rebal_dates[0]: port_value})]
@@ -133,7 +135,7 @@ def run_backtest(
     period_rows: list[dict] = []
 
     for rd, nrd in zip(rebal_dates[:-1], rebal_dates[1:]):
-        snap = pit.priced_snapshot(fund, rd, px, operating_only=cfg.operating_only)
+        snap = pit.priced_snapshot(fund, rd, px, operating_only=cfg.operating_only, with_history=with_history)
         if snap.empty:
             warnings.append(f"{rd.date()}: no companies with fundamentals+ticker known")
             continue

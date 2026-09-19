@@ -24,9 +24,10 @@ def ranked() -> pd.DataFrame:
             "price": [10.0, 20.0],
             "fair_value_est": [25.0, 22.0],
             "fair_value_est_upside": [1.5, 0.1],
-            "n_models": [5, 3],
-            "pe": [8.0, np.nan],
-            "roe": [0.2, np.nan],
+            "pe_norm": [8.0, np.nan],
+            "profit_years": [5.0, 4.0],
+            "revenue_cagr": [0.06, -0.02],
+            "fcf_conversion": [0.9, np.nan],
             "debt_to_equity": [0.5, 1.2],
         },
         index=pd.Index([101, 202], name="cik"),
@@ -39,9 +40,9 @@ def empty() -> pd.DataFrame:
 
 
 def test_build_view_drops_missing_and_resets_index(ranked):
-    view = report.build_view(ranked.drop(columns=["roe"]))
-    assert "roe" not in view.columns
-    assert list(view.columns) == [c for c in report.VIEW_COLUMNS if c != "roe"]
+    view = report.build_view(ranked.drop(columns=["fcf_conversion"]))
+    assert "fcf_conversion" not in view.columns
+    assert list(view.columns) == [c for c in report.VIEW_COLUMNS if c != "fcf_conversion"]
     assert list(view.index) == [0, 1]
 
 
@@ -53,7 +54,7 @@ def test_build_payload_shape_and_null_coercion(ranked):
     assert payload["generated_utc"].endswith("+00:00")
     assert payload["rows"][0]["ticker"] == "AAA"
     # NaN must serialize as JSON null, not the string "NaN"
-    assert payload["rows"][1]["roe"] is None
+    assert payload["rows"][1]["pe_norm"] is None
     json.dumps(payload)  # must not raise
 
 
@@ -67,7 +68,7 @@ def test_render_csv_roundtrips(ranked):
     back = pd.read_csv(io.StringIO(report.render_csv(ranked)))
     assert len(back) == 2
     assert list(back["ticker"]) == ["AAA", "BBB"]
-    assert pd.isna(back.loc[1, "roe"])
+    assert pd.isna(back.loc[1, "pe_norm"])
 
 
 def test_render_html_is_self_contained_and_escaped(ranked):
@@ -82,6 +83,7 @@ def test_render_html_is_self_contained_and_escaped(ranked):
     assert "$25.00" in doc
     assert "Not investment advice." in doc
     assert "market cap &ge; $2,000M" in doc
+    assert "+6%" in doc and "90%" in doc  # revenue growth, cash conversion
 
 
 def test_render_html_empty_has_message(empty):

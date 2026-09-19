@@ -177,6 +177,7 @@ def priced_snapshot(
     *,
     operating_only: bool = True,
     max_staleness_days: int = 550,
+    with_history: bool = False,
 ) -> pd.DataFrame:
     """:func:`company_snapshot`, priced at ``asof``: price, market cap and price metrics.
 
@@ -184,6 +185,12 @@ def priced_snapshot(
     dividend-adjusted one — that is lower by every dividend paid since, which
     would flatter past dividend payers. A company with no recent close keeps a
     NaN price (and so a NaN market cap and P/E).
+
+    ``with_history`` adds what takes several years of filings: the normalized
+    and consistency metrics (:data:`lti.metrics.HISTORY_METRICS`, via
+    :mod:`lti.history`) and the fair-value upsides built on them
+    (:data:`lti.metrics.VALUATION_METRICS`). It costs a pass over the history,
+    so it's only worth asking for when something ranks on those.
     """
     asof = pd.Timestamp(asof)
     snap = company_snapshot(
@@ -193,4 +200,10 @@ def priced_snapshot(
         return snap
     price = prices_mod.prices_asof(px.close, snap["ticker"], asof)
     shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else pd.Series(np.nan, index=snap.index)
-    return metrics.add_price_metrics(snap, price=price, market_cap=price * shares)
+    snap = metrics.add_price_metrics(snap, price=price, market_cap=price * shares)
+    if with_history:
+        from lti import history, valuation  # both build on this module
+
+        snap = history.add_history(snap, fund, asof, px.splits)
+        snap = valuation.add_fair_value_metrics(snap)
+    return snap

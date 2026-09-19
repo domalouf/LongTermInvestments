@@ -10,7 +10,13 @@ import streamlit as st
 
 from lti.app import theme
 from lti.backtest import BacktestConfig, rebalance_month_spread, run_backtest
-from lti.metrics import FUNDAMENTAL_METRICS, MAGIC_FORMULA_METRICS, PRICE_METRICS
+from lti.metrics import (
+    FUNDAMENTAL_METRICS,
+    HISTORY_METRICS,
+    MAGIC_FORMULA_METRICS,
+    PRICE_METRICS,
+    VALUATION_METRICS,
+)
 from lti.ranking import ScreenSpec
 
 theme.header(
@@ -59,7 +65,7 @@ def _spread(cfg_key: str) -> pd.DataFrame:
 
 with st.sidebar:
     st.header("Strategy")
-    all_metrics = FUNDAMENTAL_METRICS + PRICE_METRICS
+    all_metrics = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
     magic = st.checkbox(
         "Greenblatt Magic Formula",
         value=False,

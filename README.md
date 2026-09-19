@@ -68,8 +68,9 @@ lti backtest --magic-formula --top-n 30 --start 2013-01-01
 # 4b. See which metrics actually rank stocks by forward return
 lti factor-ic --start 2012-01-01 --horizon 12 --step 12
 
-# 4c. Today's most undervalued names by blended intrinsic value
-lti undervalued --top 30 --market-cap-min 2000 --min-models 3
+# 4c. Today's most undervalued steady earners by blended intrinsic value (normalized earnings)
+lti undervalued --top 30 --market-cap-min 2000 --min-profit-years 4
+#     --include-financials    keep banks, insurers, REITs and BDCs
 #     --format html|json|csv  prints that instead of a table
 #     --out DIR               writes index.html + undervalued.{json,csv} (the public snapshot)
 
@@ -246,7 +247,11 @@ Sidebar: **Metrics**, **Start/End** (as-of dates repeat on the start's day of ye
 April by default), **Forward-return horizon** (months), **As-of spacing**
 (months — set ≥ horizon for non-overlapping, honest t-stats), **Min market cap**,
 **Require positive EPS**, **Operating companies only**, **Quantile buckets**,
-**Correlation** (spearman / pearson); hit **Run analysis**.
+**Correlation** (spearman / pearson); hit **Run analysis**. Besides the single-filing
+metrics it covers the multi-year ones (`pe_norm`, `earnings_yield_norm`, `fcf_yield_norm`,
+`profit_years`, `revenue_cagr`, `fcf_conversion`, `roic_median`) and the Undervalued page's
+own ranking, `fair_value_upside` — plus `fair_value_upside_1y`, the same models on the
+latest year alone, for comparison. The Screener and Backtest can rank on all of them.
 
 For a grid of historical as-of dates the page takes a point-in-time snapshot (the same
 split-correct, no-look-ahead path as the backtest), computes every metric and each stock's
@@ -269,38 +274,49 @@ Body: eight tabs — **Price** (adjusted close with filing-date markers), **Inco
 (revenue → net income bars + EPS), **Margins & returns** (gross / net / FCF margin, ROE),
 **Balance sheet** (assets / liabilities / equity + debt-to-equity), **Cash flow**
 (CFO / capex / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
-**Fair value** (intrinsic-value models, below, with a per-company 5-year CAGR growth
-input and adjustable discount rate / terminal growth / DCF window), and **Raw data** (the
-annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and book
+**Fair value** (intrinsic-value models, below, on normalized or latest-year earnings, with
+a per-company 5-year CAGR growth input and adjustable discount rate / terminal growth /
+DCF window), and **Raw data** (the annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and book
 value forward from its filing date, restate them onto today's share count using the
 cached split history, and price them off the split-adjusted close — without that,
 ratios across a split are wrong.
 
-### 🎯 Undervalued today — the widest value-vs-price gaps
-**The landing page.** Runs every intrinsic-value model across the whole point-in-time
-universe and ranks by the gap between blended fair value and the current price.
+### 🎯 Undervalued today — the widest value-vs-price gaps among steady earners
+**The landing page.** Runs every intrinsic-value model on each company's **normalized**
+earnings and ranks by the gap between blended fair value and the current price.
 
-Sidebar, in two groups: *Universe* (**As of**, **Min market cap ($M)**, **Require
-positive EPS**, **Min ROE**, **Exclude financials** — Graham/DDM/EPV all assume an
-operating business) and *Confidence* (**Models that must agree**, **Show top N**), with
-the DCF assumptions behind an expander.
+One year's earnings is a poor guide: it can be a cyclical peak, a one-off or the one good
+year of a chronic loss-maker, and every model multiplies it. On the latest year alone the
+top of this list was Lyft (a tax-asset release on an operating loss), Novavax and PTC
+(one good year in ten), Uniti (a merger gain) and Cal-Maine (an avian-flu egg-price
+year) — plus Prudential and DTE priced off their $25 baby bonds, which the ticker map had
+picked over the common stock. Now (`lti.history`) each company's last five fiscal years
+are taken point in time — as filed by the as-of date — and the models run on the median
+of their EPS and free cash flow, with growth from the five-year revenue trend.
 
-Body: four headline tiles; **the list** — a ranked table where upside is drawn as a bar
-so the shape of the distribution is visible at a glance, alongside price, fair value,
-how many models agreed, and `pe`/`roe`/`net_margin`/`debt_to_equity` + CSV; a **widest
-gaps** bar chart of the top 15; a **cheap for a reason?** scatter of upside against ROE
-for spotting value traps; and **do the models agree?** — every model's fair value for one
-chosen company against its traded price, which is the honest way to read a blend, since
-a tight cluster is worth far more than a high median.
+Sidebar: *Universe* (**As of**, **Min market cap ($M)**, **Exclude financials** — banks,
+insurers, REITs and business development companies — **Min ROE**), *Consistency*
+(**Profitable in at least … of the last 5 years**, default 4; **Profitable now**; **Show
+top N**) and the valuation assumptions behind an expander. A year counts as profitable
+only if EPS, net income *and* operating income were all positive.
 
-Each 10-K's per-share figures are restated for any split since it was filed (a
-company that split 10:1 after its last 10-K would otherwise show ten times its real EPS
-against today's price); commodity/crypto trusts are excluded and >+500% upsides are
-filtered as data noise, but a single year's earnings can still be a cyclical peak or a
-one-off gain — the page says so. Also on the CLI as
-`lti undervalued` — with `--out DIR` it writes a self-contained `index.html` +
-`undervalued.{json,csv}`, which `deploy/` publishes nightly to `domalouf.com/invest/`
-as the public daily list.
+Body: four headline tiles; **the list** — upside drawn as a bar, price, fair value, P/E on
+the latest and on normalized EPS, profitable years, *latest vs norm* (latest EPS ÷
+normalized — a peak or a one-off shows far above 1, a trough far below), the revenue
+trend, *cash conversion* (five years' free cash flow ÷ net income) and debt, + CSV; a
+**widest gaps** chart; **cheap for a reason?** — upside against latest-vs-norm EPS, since
+a name below the line is a bet on earnings recovering; and **how the fair value is built**
+— each model's value for one company beside its earnings history and the normalized line.
+
+**What the evidence says.** Backtested (April rebalance, 2012–, $1B+, financials out),
+buying the 30 widest gaps each year returned 8.6% a year against 11.9% for all steady
+earners, trailing them in every one of the 12 rebalance months; the old latest-year
+version did 10.1% against 12.4%. The fair-value upside has no measurable IC either way
+(t ≈ 0.5), while consistency does: `profit_years` has the strongest IC of any metric here
+(0.08, t 2.4). So this is a list of candidates to research, not a buy list — and the page
+says so. Also on the CLI as `lti undervalued`; with `--out DIR` it writes a self-contained
+`index.html` + `undervalued.{json,csv}`, which `deploy/` publishes nightly to
+`domalouf.com/invest/` as the public daily list.
 
 ### Intrinsic-value models (`lti.valuation`)
 `add_valuation_models()` turns a fundamentals snapshot + price into a fair value per
@@ -310,9 +326,11 @@ P/E = earnings-growth % + dividend yield %), **Graham number** (√(22.5·EPS·B
 **Graham revised** (EPS·(8.5+2g)·4.4/Y), **DDM** (Gordon growth on dividends, perpetual
 growth capped at the terminal rate) and **EPV** (no-growth capitalised earnings, EPS/r).
 `fair_value_est` is the median of the models that produced a number; `*_upside` is
-`fair value ÷ price − 1`. Growth defaults to a one-year figure clipped to `[0, cap]` —
-crude; pass a multi-year `historical_cagr()` for a real estimate. These are rough,
-assumption-sensitive estimates, not investment advice.
+`fair value ÷ price − 1`. `basis="normalized"` (the default) feeds them normalized EPS,
+normalized FCF per share and the five-year revenue CAGR from `lti.history`;
+`basis="latest"` the latest 10-K and its one-year growth. Growth is clipped to
+`[0, cap]` either way. These are rough, assumption-sensitive estimates, not investment
+advice.
 
 ### Smoke mode
 
@@ -332,12 +350,13 @@ streamlit run src/lti/app/Home.py
 src/lti/
   config.py        paths + one-time secfsdstools config (import side-effect)
   sec_update.py    wrappers around secfsdstools update / automation pipeline
-  tickers.py       CIK <-> ticker map (primary = most common-stock-like symbol)
+  tickers.py       CIK <-> ticker map (primary = the SEC's first-listed security)
   fundamentals.py  build/load the flat fundamentals.parquet + coverage report
-  rawtags.py       SIC + debt / PP&E / goodwill straight from the raw SEC files
+  rawtags.py       SIC + debt / PP&E / goodwill / share counts straight from the raw SEC files
   sectors.py       SIC -> division, and the financials / utilities exclusions
   prices.py        yfinance cache: total-return + split-adjusted panels, split history (resumable)
   metrics.py       P/E, P/B, PEG, EBIT/EV, ROIC, debt/equity, ROE, margins, growth, ...
+  history.py       five years of filings, point in time: normalized EPS/FCF, consistency, growth
   valuation.py     intrinsic-value models (DCF, Lynch, Graham, DDM, EPV) + rank_undervalued
   report.py        render the undervalued list to static index.html / .json / .csv
   pit.py           point-in-time snapshots: split-correct, operating companies, priced
@@ -378,4 +397,6 @@ tests/             pure-logic unit tests (no network / SEC data)
   is ~27% of $1B+ revenue filings — Chevron, GM, JPMorgan and Berkshire all come
   through at a 100% gross margin. Don't screen on it without checking.
 - No transaction costs, slippage or taxes.
+- Normalized earnings assume the last five years are a fair guide: a business in lasting
+  decline, or a cycle longer than five years, still fools them.
 - Survivorship bias (see above) — a proper point-in-time delisting map needs paid data.

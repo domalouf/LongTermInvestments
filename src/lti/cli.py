@@ -196,8 +196,10 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
         "top_n": args.top,
         "market_cap_min": args.market_cap_min * 1e6,
         "min_models": args.min_models,
+        "min_profit_years": args.min_profit_years,
         "min_roe": args.min_roe,
         "require_positive_eps": not args.allow_negative_eps,
+        "exclude_financials": not args.include_financials,
         "discount_rate": args.discount_rate,
         "growth_cap": args.growth_cap,
     }
@@ -209,7 +211,9 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
         market_cap_min=params["market_cap_min"],
         require_positive_eps=params["require_positive_eps"],
         min_models=args.min_models,
+        min_profit_years=args.min_profit_years,
         min_roe=args.min_roe,
+        exclude_financials=params["exclude_financials"],
         top_n=args.top,
     )
 
@@ -230,7 +234,7 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
             return
         view = report.build_view(ranked)
         view["fair_value_est_upside"] = (view["fair_value_est_upside"] * 100).round(1)
-        for c in ("price", "fair_value_est", "pe", "roe", "debt_to_equity"):
+        for c in ("price", "fair_value_est", "pe_norm", "revenue_cagr", "fcf_conversion", "debt_to_equity"):
             if c in view.columns:
                 view[c] = view[c].round(2)
         print(f"\n=== most undervalued as of {asof} ({len(ranked)} shown) ===")
@@ -345,11 +349,19 @@ def build_parser() -> argparse.ArgumentParser:
     uv.add_argument("--asof", default=None, help="date (default today)")
     uv.add_argument("--top", type=int, default=30)
     uv.add_argument("--market-cap-min", type=float, default=1000.0, help="floor ($M)")
-    uv.add_argument("--min-models", type=int, default=3, help="valuation models that must agree")
+    uv.add_argument("--min-models", type=int, default=3, help="valuation models that must produce a value")
+    uv.add_argument(
+        "--min-profit-years", type=int, default=4,
+        help="profitable in at least this many of the last 5 years (default 4)",
+    )
+    uv.add_argument(
+        "--include-financials", action="store_true",
+        help="keep banks, insurers, REITs and BDCs (the models assume an operating business)",
+    )
     uv.add_argument("--min-roe", type=float, default=None, help="quality floor, e.g. 0.1")
     uv.add_argument("--discount-rate", type=float, default=0.09)
     uv.add_argument("--growth-cap", type=float, default=0.15)
-    uv.add_argument("--allow-negative-eps", action="store_true")
+    uv.add_argument("--allow-negative-eps", action="store_true", help="drop the profitable-now requirement")
     uv.add_argument(
         "--format",
         choices=["text", "html", "json", "csv"],

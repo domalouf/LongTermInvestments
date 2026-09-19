@@ -207,7 +207,7 @@ def test_valuation_models_math():
     )
     price = pd.Series({1: 50.0, 2: 8.0, 3: 40.0})
     a = val.ValuationAssumptions(discount_rate=0.10, terminal_growth=0.02, dcf_years=10, growth_cap=0.15)
-    out = val.add_valuation_models(df, price, assumptions=a)
+    out = val.add_valuation_models(df, price, assumptions=a, basis="latest")
 
     assert out.loc[1, "graham_number"] == pytest.approx((22.5 * 5 * 20) ** 0.5)
     assert np.isnan(out.loc[2, "graham_number"])  # negative eps

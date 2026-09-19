@@ -25,8 +25,29 @@ FUNDAMENTAL_METRICS = [
 
 PRICE_METRICS = ["pe", "pb", "earnings_yield", "ebit_ev", "peg"]
 
+# From several years of filings rather than the latest one (lti.history): the
+# normalized versions of the valuation ratios, and how consistent the business is.
+HISTORY_METRICS = [
+    "pe_norm",
+    "earnings_yield_norm",
+    "fcf_yield_norm",
+    "profit_years",
+    "revenue_cagr",
+    "fcf_conversion",
+    "roic_median",
+]
+
+# Blended intrinsic-value upside (lti.valuation): on normalized earnings, and on
+# the latest year alone — what the Undervalued page ranked on before.
+VALUATION_METRICS = ["fair_value_upside", "fair_value_upside_1y"]
+
 # lower value = "better" (used as the default sort direction in ranking)
-LOWER_IS_BETTER = {"pe", "pb", "debt_to_equity", "peg"}
+LOWER_IS_BETTER = {"pe", "pb", "debt_to_equity", "peg", "pe_norm"}
+
+
+def needs_history(names) -> bool:
+    """Whether any of ``names`` (metrics or filters) needs the multi-year history."""
+    return any(n in HISTORY_METRICS or n in VALUATION_METRICS or n == "min_profit_years" for n in names)
 
 # Greenblatt's Magic Formula: rank on these two, equally weighted.
 MAGIC_FORMULA_METRICS = ["ebit_ev", "roic"]

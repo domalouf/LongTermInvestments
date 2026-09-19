@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -270,20 +271,40 @@ with fv_tab:
         if "shares_outstanding" in latest.columns:
             latest["shares_outstanding"] = latest["shares_outstanding"] * div
 
+        # normalized earnings: the median of the last few years, each on today's share basis
+        from lti.history import HISTORY_YEARS, summarize_history
+
+        norm = summarize_history(annual.tail(HISTORY_YEARS), px.splits)
+        for c in norm.columns:
+            latest[c] = norm[c].iloc[0] if len(norm) else np.nan
+        shares_now = latest["shares_outstanding"] if "shares_outstanding" in latest.columns else np.nan
+        latest["fcf_ps_norm"] = latest["fcf_norm"] / shares_now
+
         cagr_eps = historical_cagr(annual, "eps", 5)
         cagr_rev = historical_cagr(annual, "revenues", 5)
 
         with st.expander("Assumptions", expanded=True):
+            eps_latest, eps_norm = latest["eps"].iloc[0], latest["eps_norm"].iloc[0]
+            basis_label = st.radio(
+                "Earnings basis",
+                [f"Normalized — median of {HISTORY_YEARS} years (${eps_norm:,.2f})" if pd.notna(eps_norm)
+                 else f"Normalized — median of {HISTORY_YEARS} years (n/a)",
+                 f"Latest year (${eps_latest:,.2f})" if pd.notna(eps_latest) else "Latest year (n/a)"],
+                horizontal=True,
+                help="One year's earnings can be a peak, a trough or a one-off; the models "
+                     "multiply whichever you pick. EPS restated onto today's share count.",
+            )
+            basis = "normalized" if basis_label.startswith("Normalized") else "latest"
             a1, a2, a3 = st.columns(3)
             disc = a1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
             term = a2.slider("Terminal growth", 0.0, 0.04, 0.025, 0.005, format="%.3f")
             years = a3.slider("DCF window (years)", 5, 15, 10)
 
             opts = []
-            if pd.notna(cagr_eps):
-                opts.append((f"EPS CAGR 5y ({cagr_eps:.1%})", float(cagr_eps)))
             if pd.notna(cagr_rev):
                 opts.append((f"Revenue CAGR 5y ({cagr_rev:.1%})", float(cagr_rev)))
+            if pd.notna(cagr_eps):
+                opts.append((f"EPS CAGR 5y ({cagr_eps:.1%})", float(cagr_eps)))
             opts.append(("Custom", None))
             labels = [o[0] for o in opts]
             pick = st.radio("Growth rate", labels, horizontal=True)
@@ -298,7 +319,7 @@ with fv_tab:
         assumptions = ValuationAssumptions(
             discount_rate=disc, terminal_growth=term, dcf_years=years, fixed_growth=g_val
         )
-        v = add_valuation_models(latest, pd.Series({cik: cur_price}), assumptions=assumptions)
+        v = add_valuation_models(latest, pd.Series({cik: cur_price}), assumptions=assumptions, basis=basis)
         row = v.iloc[0]
 
         present = [m for m in MODELS if m in v.columns and pd.notna(row[m])]
@@ -359,15 +380,16 @@ with fv_tab:
             )
             g_used = row.get("est_growth")
             dy_used = row.get("dividend_yield")
-            bits = [f"growth **{g_used:.1%}**" if pd.notna(g_used) else None,
+            bits = [f"{'normalized' if basis == 'normalized' else 'latest-year'} earnings",
+                    f"growth **{g_used:.1%}**" if pd.notna(g_used) else None,
                     f"dividend yield **{dy_used:.1%}**" if dy_used is not None and pd.notna(dy_used) else None,
                     f"discount rate **{disc:.1%}**"]
             st.caption("Inputs: " + " · ".join(b for b in bits if b) + ". "
                        "DCF uses FCF/share; EPV capitalises EPS with no growth; Graham number "
                        "= √(22.5·EPS·BVPS); Lynch fair P/E = growth% + yield%; DDM is Gordon growth.")
             st.warning(
-                "Rough estimates from a single 10-K and a crude growth input — sensitive to the "
-                "assumptions above. Not investment advice."
+                "Rough estimates, sensitive to the assumptions above — normalized earnings assume "
+                "the last few years are a fair guide to the next. Not investment advice."
             )
 
 with raw_tab:

@@ -10,9 +10,11 @@ from lti import pit, prices as prices_mod, ranking
 from lti.app import theme
 from lti.metrics import (
     FUNDAMENTAL_METRICS,
+    HISTORY_METRICS,
     LOWER_IS_BETTER,
     MAGIC_FORMULA_METRICS,
     PRICE_METRICS,
+    VALUATION_METRICS,
 )
 
 theme.header(
@@ -41,7 +43,7 @@ with st.sidebar:
     st.header("Screen")
     asof = st.date_input("As of", value=pd.Timestamp.today().date())
     cap_floor_m = st.number_input("Min market cap ($M)", value=500.0, step=100.0, min_value=0.0)
-    all_metrics = FUNDAMENTAL_METRICS + PRICE_METRICS
+    all_metrics = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
     magic = st.checkbox(
         "Greenblatt Magic Formula",
         value=False,
@@ -88,13 +90,14 @@ asof_ts = pd.Timestamp(asof)
 if px.close.empty:
     # fundamentals-only ranking still works; anything priced needs the backfill
     snap = pit.company_snapshot(fund, asof_ts, px.splits, operating_only=operating_only)
-    if any(m in PRICE_METRICS for m in chosen) or cap_floor_m > 0:
+    if any(m in PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS for m in chosen) or cap_floor_m > 0:
         st.warning(
             "No split-adjusted price cache — price metrics and the market-cap filter are "
             "unavailable. Run `lti fetch-prices`."
         )
 else:
-    snap = pit.priced_snapshot(fund, asof_ts, px, operating_only=operating_only)
+    # with history: the fair-value table below runs on normalized earnings
+    snap = pit.priced_snapshot(fund, asof_ts, px, operating_only=operating_only, with_history=True)
 
 spec = ranking.ScreenSpec(
     metrics=chosen,
@@ -229,20 +232,24 @@ else:
     disc = fv1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
     gcap = fv2.slider("Max growth", 0.05, 0.30, 0.15, 0.01, format="%.2f")
     picks_snap = ranked.head(top_n)
+    basis = "normalized" if "eps_norm" in picks_snap.columns else "latest"
     v = add_valuation_models(
         picks_snap, picks_snap["price"],
         assumptions=ValuationAssumptions(discount_rate=disc, growth_cap=gcap),
+        basis=basis,
     )
     from lti.valuation import MODELS
 
-    cols = ["ticker", "price", "est_growth", "fair_value_est", "fair_value_est_upside"]
+    cols = ["ticker", "price", "eps_norm", "profit_years", "est_growth", "fair_value_est", "fair_value_est_upside"]
     cols += [f"{m}_upside" for m in MODELS if f"{m}_upside" in v.columns]
     fv_table = v[[c for c in cols if c in v.columns]].copy()
-    fmt = {"price": "${:,.2f}", "est_growth": "{:.0%}", "fair_value_est": "${:,.2f}"}
+    fmt = {"price": "${:,.2f}", "eps_norm": "${:,.2f}", "profit_years": "{:.0f}",
+           "est_growth": "{:.0%}", "fair_value_est": "${:,.2f}"}
     fmt.update({c: "{:+.0%}" for c in fv_table.columns if c.endswith("_upside")})
     st.dataframe(fv_table.style.format(fmt, na_rep="—"), hide_index=True, width="stretch")
     st.caption(
         "`*_upside` = model fair value ÷ price − 1. Blended `fair_value_est` is the median of the "
-        "models that produced a number. Growth is a 1-year figure clipped to [0, max] — crude; "
-        "the Stock page has per-company CAGRs and adjustable assumptions."
+        "models that produced a number. The models run on normalized earnings — `eps_norm`, the "
+        "median of the last five years' EPS — with growth from the five-year revenue trend, "
+        "clipped to [0, max]; `profit_years` is how many of those years were profitable."
     )

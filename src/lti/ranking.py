@@ -39,8 +39,17 @@ def _apply_filters(snapshot: pd.DataFrame, filters: dict) -> pd.DataFrame:
         df = df[df["eps"] > 0]
     if filters.get("require_price") and "price" in df.columns:
         df = df[df["price"].notna()]
+    if filters.get("min_profit_years") is not None:
+        if "profit_years" not in df.columns:
+            raise KeyError(
+                "cannot apply min_profit_years: the snapshot has no multi-year history "
+                "— build it with pit.priced_snapshot(..., with_history=True)"
+            )
+        df = df[df["profit_years"] >= filters["min_profit_years"]]
     if filters.get("exclude_financials"):
         df = _drop_sector(df, "is_financial", sectors.is_financial)
+        if "sic" in df.columns:  # BDCs and other investment companies carry no SIC
+            df = df[~sectors.is_investment_company(df["sic"])]
     if filters.get("exclude_utilities"):
         df = _drop_sector(df, "is_utility", sectors.is_utility)
     return df

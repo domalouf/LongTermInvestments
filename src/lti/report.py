@@ -28,9 +28,10 @@ VIEW_COLUMNS: list[str] = [
     "price",
     "fair_value_est",
     "fair_value_est_upside",
-    "n_models",
-    "pe",
-    "roe",
+    "pe_norm",
+    "profit_years",
+    "revenue_cagr",
+    "fcf_conversion",
     "debt_to_equity",
 ]
 
@@ -41,9 +42,10 @@ _COLUMN_LABELS: dict[str, str] = {
     "price": "Price",
     "fair_value_est": "Fair value",
     "fair_value_est_upside": "Upside",
-    "n_models": "Models",
-    "pe": "P/E",
-    "roe": "ROE",
+    "pe_norm": "P/E (5y)",
+    "profit_years": "Profitable yrs",
+    "revenue_cagr": "Revenue growth",
+    "fcf_conversion": "Cash conversion",
     "debt_to_equity": "D/E",
 }
 
@@ -53,9 +55,10 @@ _NUMERIC_COLUMNS = {
     "price",
     "fair_value_est",
     "fair_value_est_upside",
-    "n_models",
-    "pe",
-    "roe",
+    "pe_norm",
+    "profit_years",
+    "revenue_cagr",
+    "fcf_conversion",
     "debt_to_equity",
 }
 
@@ -108,15 +111,15 @@ def render_csv(ranked: pd.DataFrame) -> str:
 def _fmt_cell(col: str, val) -> str:
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "&mdash;"
-    if col in ("rank", "n_models"):
+    if col in ("rank", "n_models", "profit_years"):
         return f"{int(val)}"
     if col in ("price", "fair_value_est"):
         return f"${val:,.2f}"
-    if col == "fair_value_est_upside":
+    if col in ("fair_value_est_upside", "revenue_cagr"):
         return f"{val:+.0%}"
-    if col == "roe":
+    if col in ("roe", "fcf_conversion"):
         return f"{val:.0%}"
-    if col in ("pe", "debt_to_equity"):
+    if col in ("pe", "pe_norm", "debt_to_equity"):
         return f"{val:.1f}"
     return html.escape(str(val))
 
@@ -133,10 +136,10 @@ def _params_summary(params: dict) -> str:
     bits: list[str] = []
     if params.get("market_cap_min"):
         bits.append(f"market cap &ge; ${params['market_cap_min'] / 1e6:,.0f}M")
-    if params.get("min_models"):
-        bits.append(f"&ge; {params['min_models']} models agree")
+    if params.get("min_profit_years"):
+        bits.append(f"profitable in &ge; {params['min_profit_years']} of the last 5 years")
     if params.get("require_positive_eps"):
-        bits.append("positive EPS")
+        bits.append("profitable now")
     if params.get("min_roe"):
         bits.append(f"ROE &ge; {params['min_roe']:.0%}")
     if params.get("discount_rate"):
@@ -193,12 +196,20 @@ _CAVEATS = """
       market-cap floor; commodity and crypto trusts are left out. Each filing&rsquo;s
       per-share figures are restated for any stock split since it was filed.</li>
   <li><strong>Fair value</strong> is the median of the DCF, Lynch, Graham (&times;2),
-      DDM and EPV models that produced a number; <em>upside</em> is fair value
-      &divide; price &minus; 1. Ranked by upside, descending; upsides above +500%
-      are dropped as likely data errors.</li>
-  <li><strong>Watch out for</strong> one-off tax items or cyclical earnings peaks
-      (egg producers, drillers, homebuilders), which make a stock look far cheaper
-      than its through-cycle earnings power. The universe is also survivorship-biased.</li>
+      DDM and EPV models that produced a number, run on <em>normalized</em>
+      earnings &mdash; the median of the last five years&rsquo; EPS and free cash
+      flow, not the latest year alone &mdash; with growth from the five-year revenue
+      trend. <em>Upside</em> is fair value &divide; price &minus; 1. Ranked by upside,
+      descending; upsides above +500% are dropped as likely data errors.</li>
+  <li><strong>Only steady earners:</strong> profitable now and in most of the last
+      five years (a year counts only if EPS, net income and operating income were
+      all positive); financials and business development companies are left out.
+      <em>Cash conversion</em> is five years&rsquo; free cash flow over net income.</li>
+  <li><strong>Candidates, not a buy list.</strong> Backtested, the widest gaps have
+      trailed the average steady earner: usually the market knows why a stock is
+      cheap. Watch for businesses in lasting decline &mdash; normalized earnings
+      assume the last five years are a fair guide. The universe is also
+      survivorship-biased.</li>
   <li>Not investment advice.</li>
 </ul>
 """

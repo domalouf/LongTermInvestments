@@ -60,6 +60,15 @@ def is_financial(sic: pd.Series) -> pd.Series:
     return codes.between(*FINANCIALS_RANGE).fillna(False).astype(bool)
 
 
+def is_investment_company(sic: pd.Series) -> pd.Series:
+    """No SIC code at all. The SEC assigns none to business development companies
+    and other registered investment companies — Ares Capital, FS KKR, Main Street,
+    all 52 current tickered filers without one — which file 10-Ks like operating
+    companies but are lending funds. Not a financial by SIC (a missing code stays
+    unclassified), but excluded wherever financials are."""
+    return pd.to_numeric(sic, errors="coerce").isna()
+
+
 def is_utility(sic: pd.Series) -> pd.Series:
     """Electric, gas, water and sanitary services (SIC 4900-4999)."""
     codes = pd.to_numeric(sic, errors="coerce")
