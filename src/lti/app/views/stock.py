@@ -23,33 +23,14 @@ def _load_fund() -> pd.DataFrame:
     return load_fundamentals()
 
 
-@st.cache_data(show_spinner="Fetching split history…")
-def _splits(symbol: str) -> pd.Series:
-    """Split history for one ticker from yfinance (cached; best-effort).
-
-    This is a live network call and can take ten seconds or simply fail when
-    Yahoo is unreachable, so it gets a spinner — without one the page looks
-    frozen on the first load of each ticker.
-    """
-    try:
-        import yfinance as yf
-
-        s = yf.Ticker(symbol).splits
-        if s is None or len(s) == 0:
-            return pd.Series(dtype="float64")
-        s.index = pd.to_datetime(s.index).tz_localize(None)
-        return s[s > 0]
-    except Exception:  # noqa: BLE001 - offline / delisted / rate-limited
-        return pd.Series(dtype="float64")
-
-
 try:
     fund = _load_fund()
 except FileNotFoundError:
     st.error("No fundamentals table. Run `lti build-fundamentals` first.")
     st.stop()
 
-panel = prices_mod.load_adj_close()
+px = prices_mod.load_price_data()
+panel = px.adj  # total return: the price chart
 
 with st.sidebar:
     st.header("Company")
@@ -70,7 +51,10 @@ if cik is None:
 annual = stock_mod.annual_fundamentals(fund, cik)
 name = stock_mod.company_name(fund, cik) or symbol
 psym = stock_mod.price_symbol(fund, cik, panel, sym)
-splits = _splits(psym) if (adjust_splits and psym) else pd.Series(dtype="float64")
+splits = stock_mod.splits_for(px.splits, psym) if (adjust_splits and psym) else pd.Series(dtype="float64")
+# valuation runs on the split-adjusted close: the adjusted one sits below the traded
+# price by every dividend since, which would drag the early multiples down
+has_close = bool(psym) and psym in px.close.columns
 
 st.subheader(f"{symbol} — {name}")
 c1, c2, c3, c4 = st.columns(4)
@@ -225,15 +209,17 @@ with cf_tab:
         )
 
 with val_tab:
-    val = stock_mod.valuation_history(annual, panel, psym or "", splits=splits) if psym else pd.DataFrame()
+    val = stock_mod.valuation_history(annual, px.close, psym, splits=splits) if has_close else pd.DataFrame()
     if val.empty:
-        st.info("Valuation history needs both cached prices and fundamentals with EPS / book value.")
+        st.info(
+            "Valuation history needs fundamentals with EPS / book value and a split-adjusted "
+            "price series — run `lti fetch-prices` if this ticker hasn't been backfilled."
+        )
     else:
-        if splits.empty and psym:
+        if not adjust_splits:
             theme.note(
-                "No split history loaded (Yahoo unreachable, or the company never split). "
-                "If it did split, the P/E and P/B below jump at the split date and the level "
-                "before it is wrong."
+                "Split adjustment is off: if the company split, the P/E and P/B below jump at "
+                "the split date and the level before it is wrong."
             )
         for col, label in [("pe", "Price / earnings"), ("pb", "Price / book")]:
             if col not in val.columns or not val[col].notna().any():
@@ -270,7 +256,7 @@ with fv_tab:
     else:
         latest = annual.iloc[[-1]].copy()
         latest.index = pd.Index([cik], name="cik")
-        cur_price = float(panel[psym].dropna().iloc[-1])
+        cur_price = float((px.close if has_close else panel)[psym].dropna().iloc[-1])
 
         # restate the latest per-share figures onto today's share count
         div = 1.0

@@ -9,6 +9,7 @@ import pytest
 import lti  # noqa: F401  (configures secfsdstools)
 from lti import metrics, pit, ranking
 from lti.backtest import BacktestConfig, run_backtest
+from lti.prices import PriceData, empty_splits
 from lti.performance import cagr, max_drawdown, sharpe
 from lti.ranking import ScreenSpec
 
@@ -62,6 +63,12 @@ def panel() -> pd.DataFrame:
     return p
 
 
+@pytest.fixture
+def px(panel) -> PriceData:
+    """No dividends and no splits in the toy world: both price series coincide."""
+    return PriceData(adj=panel, close=panel, splits=empty_splits())
+
+
 def test_snapshot_no_lookahead(fund):
     for asof in pd.to_datetime(["2013-05-01", "2016-06-01", "2019-11-30"]):
         snap = pit.snapshot_asof(fund, asof)
@@ -85,15 +92,15 @@ def test_ranking_prefers_cheap(fund):
     assert picks == ["T1", "T2", "T3"]
 
 
-def test_backtest_runs_and_is_deterministic(fund, panel):
+def test_backtest_runs_and_is_deterministic(fund, px):
     cfg = BacktestConfig(
         screen=ScreenSpec(metrics=["pe", "debt_to_equity"], top_n=3),
         start="2012-01-01",
         end="2021-01-01",
         market_cap_min=0.0,
     )
-    r1 = run_backtest(cfg, fund=fund, price_panel=panel)
-    r2 = run_backtest(cfg, fund=fund, price_panel=panel)
+    r1 = run_backtest(cfg, fund=fund, px=px)
+    r2 = run_backtest(cfg, fund=fund, px=px)
     assert r1.holdings.equals(r2.holdings)
     assert len(r1.equity_curve) > 5
     assert r1.equity_curve.iloc[0] == cfg.initial_capital
@@ -102,7 +109,7 @@ def test_backtest_runs_and_is_deterministic(fund, panel):
     assert (r1.period_summary["n_selected"] == 3).all()
 
 
-def test_factor_ic_detects_monotonic_signal(fund, panel):
+def test_factor_ic_detects_monotonic_signal(fund, px):
     from lti.factor import ICConfig, compute_ic
 
     cfg = ICConfig(
@@ -115,7 +122,7 @@ def test_factor_ic_detects_monotonic_signal(fund, panel):
         min_names=5,
         quantiles=3,
     )
-    result = compute_ic(cfg, fund=fund, price_panel=panel)
+    result = compute_ic(cfg, fund=fund, px=px)
 
     row = result.summary.loc["debt_to_equity"]
     # low debt/equity (low cik) compounds fastest in the toy panel -> strongly negative IC
@@ -126,7 +133,7 @@ def test_factor_ic_detects_monotonic_signal(fund, panel):
     assert buckets.iloc[0] > buckets.iloc[-1]  # Q1 (cheap debt) beats Q3
 
 
-def test_factor_ic_is_deterministic_and_scoped(fund, panel):
+def test_factor_ic_is_deterministic_and_scoped(fund, px):
     from lti.factor import ICConfig, compute_ic
 
     cfg = ICConfig(
@@ -137,8 +144,8 @@ def test_factor_ic_is_deterministic_and_scoped(fund, panel):
         min_names=5,
         quantiles=3,
     )
-    r1 = compute_ic(cfg, fund=fund, price_panel=panel)
-    r2 = compute_ic(cfg, fund=fund, price_panel=panel)
+    r1 = compute_ic(cfg, fund=fund, px=px)
+    r2 = compute_ic(cfg, fund=fund, px=px)
     assert r1.ic_by_period.equals(r2.ic_by_period)
     assert set(r1.summary.index) <= {"pe", "roe", "debt_to_equity"}
     assert any("not_a_metric" in w for w in r1.warnings)
@@ -235,7 +242,7 @@ def test_rank_undervalued(fund, panel):
         cheap[c] = cheap[c] * 0.02
 
     ranked = rank_undervalued(
-        fund, cheap, "2020-06-01",
+        fund, PriceData(cheap, cheap, empty_splits()), "2020-06-01",
         assumptions=ValuationAssumptions(discount_rate=0.10),
         market_cap_min=0.0, min_models=2, max_upside=None, top_n=5,
     )

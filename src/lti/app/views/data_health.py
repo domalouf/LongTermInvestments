@@ -26,7 +26,9 @@ ARTIFACTS = [
     ("Standardized statements", paths.concat_std_bs, "lti pipeline"),
     ("Fundamentals table", paths.fundamentals_parquet, "lti build-fundamentals"),
     ("CIK → ticker map", paths.cik_ticker_parquet, "lti refresh-tickers"),
-    ("Price cache", paths.adj_close_parquet, "lti fetch-prices"),
+    ("Price cache (total return)", paths.adj_close_parquet, "lti fetch-prices"),
+    ("Price cache (split-adjusted)", paths.close_parquet, "lti fetch-prices"),
+    ("Split history", paths.splits_parquet, "lti fetch-prices"),
 ]
 
 present = [(n, p, c) for n, p, c in ARTIFACTS if p.exists()]
@@ -44,9 +46,11 @@ except Exception:  # noqa: BLE001 — the index simply may not be built yet
 try:
     from lti import prices
 
-    _panel = prices.load_adj_close()
+    _px = prices.load_price_data()
+    _panel = _px.adj
     c3.metric("Tickers priced", f"{_panel.shape[1]:,}" if not _panel.empty else "0")
 except Exception:  # noqa: BLE001
+    _px = None
     _panel = pd.DataFrame()
     c3.metric("Tickers priced", "—")
 
@@ -73,6 +77,7 @@ try:
     from lti import fundamentals
 
     fund = fundamentals.load_fundamentals()
+    _universe = set(fundamentals.price_universe(fund))
     with_ticker = fund.loc[fund["ticker"].notna(), "cik"].nunique()
     all_cik = fund["cik"].nunique()
 
@@ -131,6 +136,7 @@ try:
         "<code>ranking.rank()</code> drops rows with a missing value."
     )
 except FileNotFoundError:
+    _universe = set()
     st.info("No fundamentals table yet. Run `lti build-fundamentals` (add `--smoke` for a quick subset).")
 
 # --- prices -----------------------------------------------------------------
@@ -139,10 +145,31 @@ st.header("Price cache")
 if _panel.empty:
     st.info("No prices cached yet. Run `lti fetch-prices`.")
 else:
-    p = st.columns(3)
+    p = st.columns(5)
     p[0].metric("Tickers", f"{_panel.shape[1]:,}")
     p[1].metric("From", str(_panel.index.min().date()))
     p[2].metric("To", str(_panel.index.max().date()))
+    n_close = _px.close.shape[1] if _px is not None else 0
+    p[3].metric("Split-adjusted", f"{n_close:,}",
+                help="Tickers with a split-adjusted close — the price every valuation uses.")
+    p[4].metric("Splits on record", f"{len(_px.splits):,}" if _px is not None else "—",
+                help="Used to restate each 10-K's EPS and share count onto today's share basis.")
+
+    # only companies fetch-prices would fill: warrants, preferreds and tickers
+    # without a share count sit in the cache too, but no screen can price them,
+    # and a ticker Yahoo has stopped serving ("no_data") can't be backfilled
+    _meta = prices._load_meta()
+    _gone = set(_meta.loc[_meta["status"] == "no_data", "ticker"]) if not _meta.empty else set()
+    unbackfilled = (
+        len((_universe & set(_panel.columns)) - set(_px.close.columns) - _gone) if _px is not None else 0
+    )
+    if unbackfilled:
+        st.error(
+            f"**{unbackfilled:,} companies have no split-adjusted close.** They are left out of "
+            "every screen, backtest and valuation — pairing a back-adjusted price with an "
+            "as-reported 10-K makes any company that split later look cheap. "
+            "Run `lti fetch-prices` to backfill them."
+        )
 
     last = pd.to_datetime(pd.Series(_panel.apply(lambda c: c.last_valid_index())))
     still_trading = (last >= _panel.index.max() - pd.Timedelta(days=30)).sum()

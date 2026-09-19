@@ -71,6 +71,8 @@ class Paths:
     # price cache
     prices_dir: Path
     adj_close_parquet: Path
+    close_parquet: Path
+    splits_parquet: Path
     prices_meta_parquet: Path
 
     def all_dirs(self) -> list[Path]:
@@ -127,6 +129,8 @@ def get_paths() -> Paths:
         raw_is_tags_parquet=derived / "raw_is_tags.parquet",
         prices_dir=prices,
         adj_close_parquet=prices / "adj_close.parquet",
+        close_parquet=prices / "close.parquet",
+        splits_parquet=prices / "splits.parquet",
         prices_meta_parquet=prices / "_prices_meta.parquet",
     )
 

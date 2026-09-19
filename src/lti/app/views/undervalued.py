@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import lti.config as config
 from lti import prices as prices_mod
 from lti.app import theme
 from lti.valuation import MODELS, ValuationAssumptions, rank_undervalued
@@ -43,7 +44,7 @@ def _rank(key: str) -> pd.DataFrame:
     p = json.loads(key)
     return rank_undervalued(
         _load_fund(),
-        prices_mod.load_adj_close(),
+        prices_mod.load_price_data(),
         p["asof"],
         assumptions=ValuationAssumptions(
             discount_rate=p["discount_rate"],
@@ -63,8 +64,8 @@ try:
 except FileNotFoundError:
     st.error("No fundamentals table. Run `lti build-fundamentals` first.")
     st.stop()
-if prices_mod.load_adj_close().empty:
-    st.error("No price cache. Run `lti fetch-prices` first.")
+if not config.get_paths().close_parquet.exists():
+    st.error("No split-adjusted price cache. Run `lti fetch-prices` first.")
     st.stop()
 
 # --- filters ---------------------------------------------------------------
@@ -327,10 +328,10 @@ with st.expander("How this works, and where it misleads"):
     st.markdown(
         f"""
 **Universe.** Filings known on the as-of date (`filed ≤ date`), one row per company,
-with a ticker, positive revenue, and above the market-cap floor. Valuing as of *today*
-against the latest 10-K sidesteps the split-adjustment problem that distorts historical
-multiples — today's adjusted close and the filing's per-share figures are on a matching
-basis. A split between the last filing and today is the residual risk.
+with a ticker, positive revenue, not a commodity or crypto trust, and above the
+market-cap floor. Each filing's EPS and share count are restated for every split since
+it was filed, and the price is the split-adjusted close — so a company that split 10:1
+after its last 10-K is valued on its real earnings per share, not ten times them.
 
 **Fair value.** The median of the {len(MODELS)} models that produced a number: two-stage
 DCF, Peter Lynch, Graham number, Graham revised, dividend discount and earnings power.

@@ -15,11 +15,15 @@ CAGR from :func:`historical_cagr`) for anything more serious.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 from lti.metrics import _safe_div
+
+if TYPE_CHECKING:
+    from lti.prices import PriceData
 
 # fair-value columns added by add_valuation_models, in display order
 MODELS = [
@@ -203,7 +207,7 @@ def add_valuation_models(
 
 def rank_undervalued(
     fund: pd.DataFrame,
-    panel: pd.DataFrame,
+    px: "PriceData",
     asof,
     *,
     assumptions: ValuationAssumptions | None = None,
@@ -217,33 +221,24 @@ def rank_undervalued(
 ) -> pd.DataFrame:
     """The most undervalued names known at ``asof``, ranked by blended upside.
 
-    Point-in-time snapshot → fundamental + price metrics as of ``asof`` → every
-    valuation model → keep rows where at least ``min_models`` produced a number
-    and the blended upside is in ``(min_upside, max_upside]`` (the upper bound
-    drops data errors), then sort by ``fair_value_est_upside`` descending.
+    Split-correct priced snapshot of operating companies as of ``asof``
+    (:func:`lti.pit.priced_snapshot`) → every valuation model → keep rows where
+    at least ``min_models`` produced a number and the blended upside is in
+    ``(min_upside, max_upside]`` (the upper bound drops data errors), then sort
+    by ``fair_value_est_upside`` descending.
 
-    Valuing as of today against the latest 10-K sidesteps the split-adjustment
-    problem that distorts historical multiples: today's adjusted close equals the
-    real price and the filing's per-share figures are on a matching basis. A
-    split between the last filing and ``asof`` is the residual risk.
+    Per-share figures are restated for any split since the filing — a company
+    that split 10:1 after its last 10-K would otherwise show ten times its real
+    earnings per share against today's price.
     """
-    from lti import metrics as metrics_mod, pit, prices as prices_mod
+    from lti import pit
 
     asof = pd.Timestamp(asof)
-    snap = pit.snapshot_asof(fund, asof)
-    snap = snap[snap["ticker"].notna()]
+    snap = pit.priced_snapshot(fund, asof, px)
     if snap.empty:
         return snap
 
-    snap = metrics_mod.add_fundamental_metrics(snap)
-    price_at = prices_mod.prices_asof(panel, snap["ticker"], asof)
-    shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else None
-    mcap = price_at * shares if shares is not None else None
-    snap = metrics_mod.add_price_metrics(snap, price=price_at, market_cap=mcap)
-
     snap = snap[snap["price"].notna() & (snap["price"] > 0)]
-    if "revenues" in snap.columns:  # drop commodity / ETF trusts that file 10-Ks
-        snap = snap[snap["revenues"] > 0]
     if market_cap_min and "market_cap" in snap.columns:
         snap = snap[snap["market_cap"] >= market_cap_min]
     if require_positive_eps and "eps" in snap.columns:

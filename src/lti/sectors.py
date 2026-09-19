@@ -9,6 +9,8 @@ ranking them on ROC measures the regulator rather than the business.
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 # SIC divisions, as published by the SEC. (low, high, label) — inclusive.
@@ -27,6 +29,17 @@ _DIVISIONS: list[tuple[int, int, str]] = [
 
 FINANCIALS_RANGE = (6000, 6799)
 UTILITIES_RANGE = (4900, 4999)
+
+# Commodity Contracts Brokers & Dealers — in practice almost entirely exchange-
+# traded commodity, currency and crypto products (GLD, SLV, USO, IBIT, ...).
+COMMODITY_POOL_SIC = 6221
+# The code also covers a few real brokers and operating companies that have filed
+# under it (StoneX, Seaboard, WisdomTree), so a filer only counts as a pool if its
+# name says it is one.
+_POOL_NAME = re.compile(
+    r"\b(?:TRUST|FUNDS?|ETF|ETN|LP|L\.P\.?|PARTNERS)\b|SHARES\b|FUTURES|BITCOIN|ETHEREUM|CRYPTO|COMMODIT",
+    re.IGNORECASE,
+)
 
 
 def sic_division(sic: pd.Series) -> pd.Series:
@@ -51,6 +64,19 @@ def is_utility(sic: pd.Series) -> pd.Series:
     """Electric, gas, water and sanitary services (SIC 4900-4999)."""
     codes = pd.to_numeric(sic, errors="coerce")
     return codes.between(*UTILITIES_RANGE).fillna(False).astype(bool)
+
+
+def is_commodity_pool(sic: pd.Series, company: pd.Series) -> pd.Series:
+    """Gold / silver / oil / currency / crypto trusts and funds that file 10-Ks.
+
+    They report "earnings" (the mark-to-market on what they hold) and a share
+    count, so they get a P/E like any company — and at the top of a gold rally
+    that P/E sorts them straight to the top of a cheapness ranking. Not
+    businesses; never part of the universe.
+    """
+    codes = pd.to_numeric(sic, errors="coerce")
+    named = company.astype("string").str.contains(_POOL_NAME, na=False)
+    return (codes == COMMODITY_POOL_SIC).fillna(False).astype(bool) & named.astype(bool)
 
 
 def add_sector_columns(df: pd.DataFrame) -> pd.DataFrame:

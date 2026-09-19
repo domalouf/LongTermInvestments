@@ -7,7 +7,8 @@ sorting and filtering the data.
 
 - **Fundamentals:** [`secfsdstools`](https://github.com/HansjoergW/sec-fincancial-statement-data-set)
   (bulk SEC filings, 2009–present, 10-K filers).
-- **Prices:** [`yfinance`](https://github.com/ranaroussi/yfinance) adjusted close, cached locally.
+- **Prices:** [`yfinance`](https://github.com/ranaroussi/yfinance) — total-return and split-adjusted
+  close plus split history, cached locally.
 - **GUI:** Streamlit.
 
 > ⚠️ **Survivorship bias.** The CIK→ticker map (`sec.gov/files/company_tickers.json`) only
@@ -54,11 +55,12 @@ lti coverage
 
 # 3. Map CIKs to tickers, then cache prices for the universe (resumable)
 lti refresh-tickers
-lti fetch-prices                 # thousands of tickers via yfinance — takes a while
+lti fetch-prices                 # thousands of tickers via yfinance — takes about an hour
 lti refresh-prices              # later: cheap daily top-up of already-cached tickers
 
-# 4. Backtest a strategy
+# 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe)
 lti backtest --metrics pe,debt_to_equity --top-n 10 --start 2011-01-01
+lti backtest --metrics pe,debt_to_equity --top-n 10 --all-months   # the same, once per rebalance month
 
 # 4a. Greenblatt's Magic Formula (EBIT/EV + return on capital, no financials/utilities)
 lti backtest --magic-formula --top-n 30 --start 2013-01-01
@@ -78,6 +80,36 @@ streamlit run src/lti/app/Home.py
 `lti progress` prints an ASCII progress bar for each pipeline stage (SEC data,
 filter / standardize / concat, fundamentals, ticker map, prices) — handy for checking
 on the multi-hour full build. `lti fetch-prices` shows a live `tqdm` bar while running.
+
+### Prices, splits and look-ahead
+
+`data/prices/` holds three things, and each has one job:
+
+- `adj_close.parquet` — close adjusted for splits **and dividends**: a total-return
+  series. Used for **returns** only.
+- `close.parquet` — close adjusted for **splits only**: the traded price on today's
+  share basis. Used for **valuation** (P/E, P/B, market cap, EV, fair value).
+- `splits.parquet` — every split (`ticker, date, ratio`), used to restate each 10-K's
+  EPS and share count onto that same basis (`lti.pit.restate_per_share`).
+
+That split matters. A 10-K reports per-share figures on the share count of the day it
+was filed, while Yahoo back-adjusts prices for every split since. Pair the two as-is and
+any company that split *later* looks cheaper by the split ratio — AAPL screened at a P/E
+of 0.37 in January 2013 (really ~12), NVDA at 0.31, BKNG at 1.2. Companies split after
+their stock has risen, so this is look-ahead bias that hands a cheapness screen the
+future winners. On January rebalances, fixing it took the P/E + debt/equity top-10
+backtest (2011–) from 16.8% to 6.3% a year, and the Magic Formula top-30 (2013–) from
+14.7% to 10.6% — against 13.9% and 14.6% for SPY. The factor analysis deflated the same
+way: ROIC's IC t-stat fell from 7.0 to 2.2, and P/B's from −4.9 to 0.1. Valuing on the
+dividend-adjusted price would flatter past dividend payers too, which is why valuation
+uses `close.parquet`.
+
+`lti fetch-prices` downloads full history for any ticker without a split-adjusted
+series — so a cache from before `close.parquet` existed re-fetches every ticker once.
+`lti refresh-prices` downloads a short recent window and compares the bars it shares
+with the cache: Yahoo rewrites a ticker's whole history on a split (and the adjusted
+close on every dividend), and splicing the new window onto the old history would put a
+fake crash at the seam, so any ticker whose overlap doesn't match is re-fetched in full.
 
 ## GUI
 
@@ -117,7 +149,8 @@ Sidebar: **As of** (point-in-time date — only filings filed on/before it are u
 **Rank by** (one or more of `pe`, `pb`, `peg`, `earnings_yield`, `ebit_ev`,
 `debt_to_equity`, `current_ratio`, `roe`, `roic`, `net_margin`, `gross_margin`,
 `fcf_margin`, `revenue_growth_1y`, `eps_growth_1y`), **Top N**,
-**Require positive EPS**, and the **Exclusions** (financials / utilities).
+**Require positive EPS**, and the **Exclusions** (operating companies only — no
+commodity/crypto trusts or revenue-less shells — financials, utilities).
 Body: ranked table (raw metric values + a `<metric>_pctile` per input when ranking by
 more than one, plus `composite_score` = mean percentile-rank, lower = better), CSV
 download, a **"Ranked metric values"** bar chart per metric (each pick's value labelled,
@@ -164,23 +197,36 @@ PP&E, interest-bearing debt and as-reported operating income from `num.txt`.
   standardizer agrees to within 1% on 99.5% of rows, so preferring the raw tag costs
   nothing and removes the artefacts that would otherwise sort straight to the top.
 
-### 🧪 Backtest — simulate a strategy vs SPY
-Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month**,
-**Min market cap**, **Initial capital**); hit **Run backtest**.
-Body: equity curve vs SPY (log toggle), tiles (strategy/SPY CAGR, max drawdown, Sharpe),
-full stats table, a **survivorship-bias callout** with per-run delisting counts, the
-per-period summary, a holdings expander (every pick, every period, + CSV), and a warnings
-expander. Results are cached per exact config.
+### 🧪 Backtest — simulate a strategy vs SPY and vs its own universe
+Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month** —
+April by default, when calendar-year 10-Ks are in; in January a screen ranks on
+fundamentals a median of a year old — **Min market cap**, **Initial capital**); hit
+**Run backtest**.
+
+Two benchmarks: **SPY**, and the **universe** — every stock the screen ranked on each
+rebalance date, equal-weighted, which is what picking at random from the same candidates
+would have returned. The universe can only hold today's survivors too, so the gap
+between it and the strategy is the honest measure of the ranking; the gap to SPY has the
+survivorship bias baked in.
+
+Body: equity curve vs SPY and the universe (log toggle), tiles (strategy / universe / SPY
+CAGR, max drawdown, Sharpe), full stats table, a **survivorship-bias callout**, per-period
+excess returns against either benchmark, **Does the rebalance month matter?** (the same
+strategy run once per month — with a dozen annual rebalances, the month alone can decide
+whether a screen beats its universe), the per-period summary, a holdings expander (every
+pick with the metric values it was ranked on, + CSV), and a warnings expander. Results
+are cached per exact config.
 
 ### 📐 Factor analysis — which metrics predict returns
-Sidebar: **Metrics**, **Start/End**, **Forward-return horizon** (months), **As-of spacing**
+Sidebar: **Metrics**, **Start/End** (as-of dates repeat on the start's day of year —
+April by default), **Forward-return horizon** (months), **As-of spacing**
 (months — set ≥ horizon for non-overlapping, honest t-stats), **Min market cap**,
-**Require positive EPS**, **Quantile buckets**, **Correlation** (spearman / pearson);
-hit **Run analysis**.
+**Require positive EPS**, **Operating companies only**, **Quantile buckets**,
+**Correlation** (spearman / pearson); hit **Run analysis**.
 
-For a grid of historical as-of dates the page takes a point-in-time snapshot (same
-no-look-ahead path as the backtest), computes every metric and each stock's forward
-return, then measures the **cross-sectional** correlation between metric and forward
+For a grid of historical as-of dates the page takes a point-in-time snapshot (the same
+split-correct, no-look-ahead path as the backtest), computes every metric and each stock's
+forward return, then measures the **cross-sectional** correlation between metric and forward
 return on that date — the *Information Coefficient* (IC). Per-date ICs are aggregated
 into `mean_ic`, `ic_ir` (mean/std), `t_stat`, `hit_rate` (share of periods with the
 dominant sign), `q_spread` (top-minus-bottom quantile forward return) and `monotonicity`.
@@ -202,8 +248,9 @@ Body: eight tabs — **Price** (adjusted close with filing-date markers), **Inco
 **Fair value** (intrinsic-value models, below, with a per-company 5-year CAGR growth
 input and adjustable discount rate / terminal growth / DCF window), and **Raw data** (the
 annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and book
-value forward from its filing date and restate them onto today's share count using the
-split history pulled from Yahoo — without that, ratios across a split are wrong.
+value forward from its filing date, restate them onto today's share count using the
+cached split history, and price them off the split-adjusted close — without that,
+ratios across a split are wrong.
 
 ### 🎯 Undervalued today — the widest value-vs-price gaps
 **The landing page.** Runs every intrinsic-value model across the whole point-in-time
@@ -222,9 +269,11 @@ for spotting value traps; and **do the models agree?** — every model's fair va
 chosen company against its traded price, which is the honest way to read a blend, since
 a tight cluster is worth far more than a high median.
 
-Valuing as of today against the latest 10-K keeps the split-adjustment problem out of the
-way; commodity/ETF trusts and >+500% upsides are filtered as data noise, but a single
-year's earnings can still be a cyclical peak — the page says so. Also on the CLI as
+Each 10-K's per-share figures are restated for any split since it was filed (a
+company that split 10:1 after its last 10-K would otherwise show ten times its real EPS
+against today's price); commodity/crypto trusts are excluded and >+500% upsides are
+filtered as data noise, but a single year's earnings can still be a cyclical peak or a
+one-off gain — the page says so. Also on the CLI as
 `lti undervalued` — with `--out DIR` it writes a self-contained `index.html` +
 `undervalued.{json,csv}`, which `deploy/` publishes nightly to `domalouf.com/invest/`
 as the public daily list.
@@ -263,13 +312,13 @@ src/lti/
   fundamentals.py  build/load the flat fundamentals.parquet + coverage report
   rawtags.py       SIC + debt / PP&E / goodwill straight from the raw SEC files
   sectors.py       SIC -> division, and the financials / utilities exclusions
-  prices.py        yfinance adjusted-close cache (wide parquet panel, resumable)
+  prices.py        yfinance cache: total-return + split-adjusted panels, split history (resumable)
   metrics.py       P/E, P/B, PEG, EBIT/EV, ROIC, debt/equity, ROE, margins, growth, ...
   valuation.py     intrinsic-value models (DCF, Lynch, Graham, DDM, EPV) + rank_undervalued
   report.py        render the undervalued list to static index.html / .json / .csv
-  pit.py           point-in-time snapshots (no look-ahead)
+  pit.py           point-in-time snapshots: split-correct, operating companies, priced
   ranking.py       ScreenSpec + composite percentile-rank selection
-  backtest.py      annual-rebalance engine
+  backtest.py      annual-rebalance engine, universe benchmark, rebalance-month spread
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard
   cli.py           `lti` command-line entry point
@@ -284,19 +333,17 @@ tests/             pure-logic unit tests (no network / SEC data)
 ```
 
 `data/` (gitignored) holds everything generated: `data/sec/` (secfsdstools),
-`data/derived/` (fundamentals, ticker map), `data/prices/` (price cache).
+`data/derived/` (fundamentals, ticker map), `data/prices/` (price panels + split history).
 
 ## Known limitations / v2 ideas
 
 - Annual (10-K) only; no quarterly rebalancing yet.
 - "Debt/equity" = total liabilities / equity (not just interest-bearing debt).
-- **The screener and backtest don't split-adjust.** `market_cap` is
-  `shares_outstanding` (as reported in the 10-K) × price (back-adjusted by Yahoo),
-  so any company that split between its last filing and the as-of date gets a
-  market cap, `pe`, `pb` and `ebit_ev` that are wrong by the split ratio — e.g.
-  BKNG currently screens at a $6B market cap and a P/E of 1.2. The Stock page
-  already handles this (`lti.stock._split_divisor`); that machinery needs lifting
-  into `lti.pit` / `lti.metrics` so every page benefits.
+- Share counts are the 10-K's (restated for splits, see above), so buybacks or issuance
+  between the filing and the as-of date aren't in `market_cap` yet.
+- "Operating companies only" means positive revenue and not a commodity pool, so it also
+  drops pre-revenue companies (early-stage biotech, SPACs) — fine for value screens,
+  worth knowing when reading a universe benchmark.
 - EBIT is taken only from filings that actually tagged `OperatingIncomeLoss`
   (~76% of them), because the standardizer's *derived* value is badly wrong for
   filers whose income statement doesn't follow the usual shape. That's a real

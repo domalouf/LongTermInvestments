@@ -58,11 +58,7 @@ def cmd_fetch_prices(args: argparse.Namespace) -> None:
         wanted = [line.strip() for line in open(args.universe_file) if line.strip()]
         wanted.append(args.benchmark)
     else:
-        fund = fundamentals.load_fundamentals()
-        mask = fund["ticker"].notna()
-        if "shares_outstanding" in fund.columns:
-            mask &= fund["shares_outstanding"].notna()
-        wanted = sorted(fund.loc[mask, "ticker"].unique().tolist()) + [args.benchmark]
+        wanted = fundamentals.price_universe(fundamentals.load_fundamentals()) + [args.benchmark]
 
     prices.fetch_prices(wanted, start=args.start, batch_size=args.batch_size, force=args.force)
     report = prices.missing_report(wanted)
@@ -104,16 +100,17 @@ def _screen_from_json(path: str):
         screen=screen,
         start=raw.get("start", "2011-01-01"),
         end=raw.get("end"),
-        rebalance_month=raw.get("rebalance_month", 1),
+        rebalance_month=raw.get("rebalance_month", 4),
         benchmark=raw.get("benchmark", "SPY"),
         rf_annual=raw.get("rf_annual", 0.0),
         initial_capital=raw.get("initial_capital", 100_000.0),
         market_cap_min=raw.get("market_cap_min", 50_000_000.0),
+        operating_only=raw.get("operating_only", True),
     )
 
 
 def cmd_backtest(args: argparse.Namespace) -> None:
-    from lti.backtest import BacktestConfig, run_backtest
+    from lti.backtest import BacktestConfig, rebalance_month_spread, run_backtest
     from lti.ranking import ScreenSpec
 
     if args.config:
@@ -135,6 +132,17 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             end=args.end,
             rebalance_month=args.rebalance_month,
         )
+    if args.all_months:
+        spread = rebalance_month_spread(cfg)
+        print("\n=== the same strategy, rebalanced in each month ===")
+        print(spread.round(4).to_string(index=False))
+        ex = spread["excess_vs_univ"]
+        print(
+            f"\nexcess CAGR vs the universe: median {ex.median():+.2%}, "
+            f"range {ex.min():+.2%} to {ex.max():+.2%} across {len(spread)} months"
+        )
+        return
+
     result = run_backtest(cfg)
     print("\n=== stats ===")
     for k, v in result.stats.items():
@@ -195,7 +203,7 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
     }
     ranked = rank_undervalued(
         load_fundamentals(),
-        prices.load_adj_close(),
+        prices.load_price_data(),
         asof,
         assumptions=a,
         market_cap_min=params["market_cap_min"],
@@ -271,7 +279,10 @@ def build_parser() -> argparse.ArgumentParser:
     rt = sub.add_parser("refresh-tickers", help="refresh cik->ticker map")
     rt.set_defaults(func=cmd_refresh_tickers)
 
-    fp = sub.add_parser("fetch-prices", help="download/cache yfinance adjusted close")
+    fp = sub.add_parser(
+        "fetch-prices",
+        help="download/cache yfinance prices (total-return + split-adjusted) and split history",
+    )
     fp.add_argument("--smoke", action="store_true")
     fp.add_argument("--universe-file", help="file with one ticker per line")
     fp.add_argument("--benchmark", default="SPY")
@@ -282,7 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     rp = sub.add_parser(
         "refresh-prices",
-        help="top up already-cached tickers with recent bars (cheap daily refresh)",
+        help="top up cached tickers with recent bars; re-fetch any that split or paid a dividend",
     )
     rp.add_argument("--smoke", action="store_true")
     rp.add_argument("--lookback-days", type=int, default=7, help="recent window to re-download")
@@ -301,7 +312,14 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--top-n", type=int, default=10)
     bt.add_argument("--start", default="2011-01-01")
     bt.add_argument("--end", default=None)
-    bt.add_argument("--rebalance-month", type=int, default=1)
+    bt.add_argument(
+        "--rebalance-month", type=int, default=4,
+        help="default 4 (April), when calendar-year 10-Ks are in",
+    )
+    bt.add_argument(
+        "--all-months", action="store_true",
+        help="run the strategy once per rebalance month and print the spread",
+    )
     bt.add_argument(
         "--magic-formula",
         action="store_true",
@@ -313,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fi = sub.add_parser("factor-ic", help="cross-sectional IC of each metric vs forward return")
     fi.add_argument("--metrics", help="comma-separated; default = all known metrics")
-    fi.add_argument("--start", default="2011-01-01")
+    fi.add_argument("--start", default="2011-04-01")
     fi.add_argument("--end", default=None)
     fi.add_argument("--horizon", type=int, default=12, help="forward-return window (months)")
     fi.add_argument("--step", type=int, default=12, help="spacing of as-of dates (months)")

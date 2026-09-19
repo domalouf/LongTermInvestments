@@ -41,6 +41,7 @@ def _run(cfg_key: str):
         step_months=raw["step"],
         market_cap_min=raw["market_cap_min"],
         require_positive_eps=raw["require_positive_eps"],
+        operating_only=raw["operating_only"],
         quantiles=raw["quantiles"],
         method=raw["method"],
     )
@@ -51,12 +52,20 @@ def _run(cfg_key: str):
 with st.sidebar:
     st.header("Analysis")
     chosen = st.multiselect("Metrics", ALL_METRICS, default=list(ALL_METRICS))
-    start = st.text_input("Start", "2011-01-01")
+    start = st.text_input(
+        "Start", "2011-04-01",
+        help="As-of dates repeat on this day each year. April, like the backtest: by then "
+             "calendar-year 10-Ks are in, so each date ranks on last year's numbers.",
+    )
     end = st.text_input("End (blank = latest)", "")
     horizon = st.slider("Forward-return horizon (months)", 3, 36, 12, step=3)
     step = st.slider("As-of spacing (months)", 3, 24, 12, step=3)
     cap_floor_m = st.number_input("Min market cap ($M)", value=500.0, step=100.0, min_value=0.0)
     require_pos_eps = st.checkbox("Require positive EPS", value=False)
+    operating_only = st.checkbox(
+        "Operating companies only", value=True,
+        help="Drops commodity and crypto trusts, shells and other filers with no revenue.",
+    )
     quantiles = st.slider("Quantile buckets", 3, 10, 5)
     method = st.radio("Correlation", ["spearman", "pearson"], horizontal=True)
     go_btn = st.button("Run analysis", type="primary")
@@ -74,12 +83,17 @@ cfg_key = json.dumps(
         "step": step,
         "market_cap_min": cap_floor_m * 1e6,
         "require_positive_eps": require_pos_eps,
+        "operating_only": operating_only,
         "quantiles": quantiles,
         "method": method,
     }
 )
 
-if not go_btn:
+# A button is only True on the rerun its click triggers; remember what was run so
+# picking a metric in the charts below doesn't blank the page.
+if go_btn:
+    st.session_state["factor_key"] = cfg_key
+if st.session_state.get("factor_key") != cfg_key:
     st.info("Set the parameters in the sidebar and hit **Run analysis**.")
     st.stop()
 

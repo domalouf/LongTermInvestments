@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from lti import metrics as metrics_mod, pit, prices as prices_mod
+from lti import pit, prices as prices_mod
 from lti.metrics import FUNDAMENTAL_METRICS, PRICE_METRICS
 
 LOGGER = logging.getLogger(__name__)
@@ -31,12 +31,13 @@ ALL_METRICS: list[str] = FUNDAMENTAL_METRICS + PRICE_METRICS
 @dataclass
 class ICConfig:
     metrics: list[str] = field(default_factory=lambda: list(ALL_METRICS))
-    start: str = "2011-01-01"
+    start: str = "2011-04-01"  # April, like the backtest: calendar-year 10-Ks are in by then
     end: str | None = None
     horizon_months: int = 12   # forward-return window
     step_months: int = 12      # spacing of as-of dates (== horizon ⇒ non-overlapping)
     market_cap_min: float = 500_000_000.0
     require_positive_eps: bool = False
+    operating_only: bool = True  # drop commodity trusts, shells and other non-businesses
     quantiles: int = 5
     method: str = "spearman"   # "spearman" (rank IC) | "pearson"
     winsorize: float = 0.01    # per-period tail clip on forward returns (and on the
@@ -92,17 +93,10 @@ def _bucket_means(metric: pd.Series, fwd: pd.Series, q: int) -> pd.Series | None
     return out
 
 
-def _prepare_snapshot(fund: pd.DataFrame, panel: pd.DataFrame, asof: pd.Timestamp, cfg: ICConfig) -> pd.DataFrame:
-    snap = pit.snapshot_asof(fund, asof)
-    snap = snap[snap["ticker"].notna()]
+def _prepare_snapshot(fund: pd.DataFrame, px: prices_mod.PriceData, asof: pd.Timestamp, cfg: ICConfig) -> pd.DataFrame:
+    snap = pit.priced_snapshot(fund, asof, px, operating_only=cfg.operating_only)
     if snap.empty:
         return snap
-
-    snap = metrics_mod.add_fundamental_metrics(snap)
-    entry = prices_mod.prices_asof(panel, snap["ticker"], asof)
-    shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else None
-    mcap = entry * shares if shares is not None else None
-    snap = metrics_mod.add_price_metrics(snap, price=entry, market_cap=mcap)
 
     if cfg.market_cap_min and "market_cap" in snap.columns:
         snap = snap[snap["market_cap"] >= cfg.market_cap_min]
@@ -152,21 +146,25 @@ def _summarize(ic_by_period: pd.DataFrame, n_by_period: pd.DataFrame, bucket_ret
 def compute_ic(
     cfg: ICConfig,
     fund: pd.DataFrame | None = None,
-    price_panel: pd.DataFrame | None = None,
+    px: prices_mod.PriceData | None = None,
 ) -> ICResult:
-    """Cross-sectional IC of each metric in ``cfg.metrics`` vs forward return."""
+    """Cross-sectional IC of each metric in ``cfg.metrics`` vs forward return.
+
+    Metrics come from the split-correct priced snapshot; forward returns from
+    the total-return (adjusted) prices.
+    """
     if fund is None:
         from lti.fundamentals import load_fundamentals
 
         fund = load_fundamentals()
-    if price_panel is None:
-        price_panel = prices_mod.load_adj_close()
-    if price_panel.empty:
-        raise RuntimeError("price cache is empty — run `lti fetch-prices`")
+    if px is None:
+        px = prices_mod.load_price_data()
+    if px.empty or px.close.empty:
+        raise RuntimeError("price cache is empty or not backfilled — run `lti fetch-prices`")
 
     warnings: list[str] = []
     start = pd.Timestamp(cfg.start)
-    end = pd.Timestamp(cfg.end) if cfg.end else price_panel.index.max()
+    end = pd.Timestamp(cfg.end) if cfg.end else px.adj.index.max()
     grid = _asof_grid(start, end, cfg.horizon_months, cfg.step_months)
     if len(grid) < 2:
         raise RuntimeError("date range is too short for the chosen horizon / step")
@@ -189,17 +187,12 @@ def compute_ic(
 
     for asof in grid:
         exit_date = asof + pd.DateOffset(months=cfg.horizon_months)
-        snap = _prepare_snapshot(fund, price_panel, asof, cfg)
+        snap = _prepare_snapshot(fund, px, asof, cfg)
         if len(snap) < cfg.min_names:
             warnings.append(f"{asof.date()}: only {len(snap)} names after filters; skipped")
             continue
 
-        fwd = pd.Series(
-            {
-                cik: prices_mod.forward_return(price_panel, t, asof, exit_date)[0]
-                for cik, t in snap["ticker"].items()
-            }
-        )
+        fwd = prices_mod.forward_returns(px.adj, snap["ticker"], asof, exit_date)
         if cfg.winsorize > 0 and fwd.notna().sum() > 2:
             fwd = _winsorize(fwd, cfg.winsorize)
         snap = snap.assign(_fwd=fwd)

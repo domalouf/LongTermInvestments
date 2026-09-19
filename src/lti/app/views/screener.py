@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lti import metrics as metrics_mod, pit, prices as prices_mod, ranking
+from lti import pit, prices as prices_mod, ranking
 from lti.app import theme
 from lti.metrics import (
     FUNDAMENTAL_METRICS,
@@ -35,7 +35,7 @@ except FileNotFoundError:
     st.error("No fundamentals table. Run `lti build-fundamentals` first.")
     st.stop()
 
-panel = prices_mod.load_adj_close()
+px = prices_mod.load_price_data()
 
 with st.sidebar:
     st.header("Screen")
@@ -64,9 +64,9 @@ with st.sidebar:
     operating_only = st.checkbox(
         "Operating companies only",
         value=True,
-        help="Drops commodity and ETF trusts (gold, silver, oil), which file 10-Ks but "
-             "have no revenue — the standardizer gives them nonsense multiples, and they "
-             "otherwise dominate any cheapness ranking.",
+        help="Drops commodity and crypto trusts (gold, silver, oil, bitcoin), shells and other "
+             "filers with no revenue. Trusts report the mark-to-market on what they hold as "
+             "earnings, which otherwise puts them at the top of any cheapness ranking.",
     )
     excl_fin = st.checkbox(
         "Exclude financials (SIC 6000-6799)",
@@ -85,20 +85,16 @@ if not chosen:
     st.stop()
 
 asof_ts = pd.Timestamp(asof)
-snap = pit.snapshot_asof(fund, asof_ts)
-snap = snap[snap["ticker"].notna()]
-if operating_only and "revenues" in snap.columns:
-    snap = snap[snap["revenues"] > 0]
-snap = metrics_mod.add_fundamental_metrics(snap)
-
-need_price = any(m in PRICE_METRICS for m in chosen) or cap_floor_m > 0
-if need_price and not panel.empty:
-    price_at = prices_mod.prices_asof(panel, snap["ticker"], asof_ts)
-    shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else None
-    mcap = price_at * shares if shares is not None else None
-    snap = metrics_mod.add_price_metrics(snap, price=price_at, market_cap=mcap)
-elif need_price:
-    st.warning("No price cache — price metrics and the market-cap filter are unavailable.")
+if px.close.empty:
+    # fundamentals-only ranking still works; anything priced needs the backfill
+    snap = pit.company_snapshot(fund, asof_ts, px.splits, operating_only=operating_only)
+    if any(m in PRICE_METRICS for m in chosen) or cap_floor_m > 0:
+        st.warning(
+            "No split-adjusted price cache — price metrics and the market-cap filter are "
+            "unavailable. Run `lti fetch-prices`."
+        )
+else:
+    snap = pit.priced_snapshot(fund, asof_ts, px, operating_only=operating_only)
 
 spec = ranking.ScreenSpec(
     metrics=chosen,

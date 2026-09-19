@@ -18,7 +18,9 @@ only static HTML/JSON/CSV is copied to the Pi.
 `publish-undervalued.sh` does three things:
 
 1. `lti refresh-prices` — tops up the price cache with the last few days of bars
-   (cheap; `fetch-prices` is only needed after the universe grows).
+   and re-fetches in full any ticker that split or paid a dividend since the last
+   run (cheap; `fetch-prices` is only needed after the universe grows, or once to
+   backfill a cache built before `close.parquet` existed).
 2. `lti undervalued --out build/invest` — regenerates `index.html`,
    `undervalued.json`, `undervalued.csv`.
 3. `rsync` those to the Pi.
@@ -163,7 +165,8 @@ cloudflared tunnel info invest
 
 ### Data on the server
 
-The GUI reads `data/derived/fundamentals.parquet` and `data/prices/adj_close.parquet`.
+The GUI reads `data/derived/fundamentals.parquet` and the three price artifacts in
+`data/prices/` (`adj_close.parquet`, `close.parquet`, `splits.parquet`).
 The nightly `lti-undervalued` job keeps prices fresh; rebuild fundamentals
 quarterly (see above). The app degrades gracefully if a file is missing (the Home
 page shows what's absent).

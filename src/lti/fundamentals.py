@@ -146,8 +146,9 @@ def _flatten_statement(df: pd.DataFrame, tag_map: dict[str, str], keep_qtrs: set
     return sub.reset_index(drop=True)
 
 
-def _add_prior_year(df: pd.DataFrame) -> pd.DataFrame:
-    lag_cols = {"revenues": "revenues_prev", "net_income": "net_income_prev", "eps": "eps_prev", "equity": "equity_prev"}
+def _lag_prior_period(df: pd.DataFrame, lag_cols: dict[str, str]) -> pd.DataFrame:
+    """Attach ``lag_cols`` (``src -> dst``) from the company's previous fiscal
+    period, as its latest filing for that period reported them."""
     have = {src: dst for src, dst in lag_cols.items() if src in df.columns}
     if not have:
         return df
@@ -163,6 +164,22 @@ def _add_prior_year(df: pd.DataFrame) -> pd.DataFrame:
         latest[dst] = latest.groupby("cik")[src].shift(1)
     prev = latest.drop(columns=list(have.keys()))
     return df.merge(prev, on=["cik", "period_end"], how="left")
+
+
+# ``filed_prev`` records which filing the ``*_prev`` figures came from, so a
+# per-share one (``eps_prev``) can be restated from *its* share basis — a split
+# between the two 10-Ks would otherwise read as a 50% fall in EPS.
+_PRIOR_YEAR_COLS = {
+    "revenues": "revenues_prev",
+    "net_income": "net_income_prev",
+    "eps": "eps_prev",
+    "equity": "equity_prev",
+    "filed": "filed_prev",
+}
+
+
+def _add_prior_year(df: pd.DataFrame) -> pd.DataFrame:
+    return _lag_prior_period(df, _PRIOR_YEAR_COLS)
 
 
 # --- public API ----------------------------------------------------------
@@ -258,6 +275,15 @@ def build_fundamentals(smoke: bool = False, quarters: list[str] | None = None) -
     return str(out_path)
 
 
+def price_universe(fund: pd.DataFrame) -> list[str]:
+    """The tickers ``lti fetch-prices`` caches: every primary ticker with a share
+    count — without one there is no market cap, so no screen can use the price."""
+    mask = fund["ticker"].notna()
+    if "shares_outstanding" in fund.columns:
+        mask &= fund["shares_outstanding"].notna()
+    return sorted(fund.loc[mask, "ticker"].astype(str).unique().tolist())
+
+
 def load_fundamentals(smoke: bool | None = None) -> pd.DataFrame:
     paths = config.get_paths()
     path = paths.fundamentals_parquet
@@ -267,7 +293,11 @@ def load_fundamentals(smoke: bool | None = None) -> pd.DataFrame:
         path = paths.derived_dir / "fundamentals.parquet"
     if not path.exists():
         raise FileNotFoundError(f"{path} not found — run `lti build-fundamentals`")
-    return pd.read_parquet(path)
+    df = pd.read_parquet(path)
+    if "filed_prev" not in df.columns and "filed" in df.columns:
+        # built before the column existed; it derives exactly from what's here
+        df = _lag_prior_period(df, {"filed": "filed_prev"})
+    return df
 
 
 def coverage_report(df: pd.DataFrame | None = None) -> pd.DataFrame:

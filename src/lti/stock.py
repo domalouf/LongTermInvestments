@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from lti import metrics as metrics_mod
+from lti import metrics as metrics_mod, pit
 
 # annual line items worth charting, in statement order
 INCOME_ITEMS = ["revenues", "gross_profit", "operating_income", "net_income"]
@@ -89,21 +89,24 @@ def annual_fundamentals(fund: pd.DataFrame, cik: int) -> pd.DataFrame:
     return metrics_mod.add_fundamental_metrics(sub)
 
 
+def splits_for(splits: pd.DataFrame, symbol: str) -> pd.Series:
+    """One ticker's ``{date: ratio}`` split history from the cached split table."""
+    if splits is None or splits.empty:
+        return pd.Series(dtype="float64")
+    sub = splits[splits["ticker"].astype(str).str.upper() == symbol.upper().strip()]
+    return pd.Series(sub["ratio"].to_numpy(dtype="float64"), index=pd.to_datetime(sub["date"])).sort_index()
+
+
 def _split_divisor(filed_dates: pd.Series, splits: pd.Series | None) -> np.ndarray:
     """Per-filing factor that restates as-reported per-share figures onto today's
     share basis: the product of every split ratio that took effect *after* the
-    filing. Matches the fully back-adjusted price panel from yfinance."""
+    filing. Matches the split-adjusted price panel."""
     n = len(filed_dates)
     if splits is None or len(splits) == 0:
         return np.ones(n)
-    s = splits[splits > 0].sort_index()
-    dates = pd.to_datetime(filed_dates).to_numpy()
-    out = np.ones(n)
-    for i, d in enumerate(dates):
-        future = s[s.index > pd.Timestamp(d)]
-        if len(future):
-            out[i] = float(future.prod())
-    return out
+    table = pd.DataFrame({"ticker": "_", "date": pd.to_datetime(splits.index), "ratio": splits.to_numpy(dtype="float64")})
+    rows = pd.Series("_", index=range(n))
+    return pit.split_factor_after(rows, pd.Series(pd.to_datetime(filed_dates).to_numpy()), table).to_numpy()
 
 
 def valuation_history(
@@ -118,8 +121,11 @@ def valuation_history(
     Each row uses the most recent 10-K known at that date (its filing date), so
     the P/E and P/B series step when a new filing lands. As-reported EPS and book
     value per share are restated onto today's share count using ``splits`` (a
-    ``{date: ratio}`` series, e.g. from ``yfinance``) so they line up with the
-    back-adjusted price panel; without it, ratios across a stock split are wrong.
+    ``{date: ratio}`` series — :func:`splits_for`) so they line up with the
+    split-adjusted price panel; without it, ratios across a stock split are wrong.
+    Pass the split-adjusted ``close`` panel, not the dividend-adjusted one: that
+    sits below the traded price by every dividend paid since, which drags the
+    early part of the P/E history down.
     """
     symbol = symbol.upper().strip()
     if annual.empty or symbol not in panel.columns:

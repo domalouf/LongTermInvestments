@@ -78,6 +78,7 @@ def summarize(
     bench: pd.Series,
     rf_annual: float = 0.0,
     holdings: pd.DataFrame | None = None,
+    universe: pd.Series | None = None,
 ) -> dict:
     p_mdd, p_peak, p_trough = max_drawdown(port)
     b_mdd, _, _ = max_drawdown(bench)
@@ -96,6 +97,13 @@ def summarize(
         "port_max_dd_peak": p_peak,
         "port_max_dd_trough": p_trough,
     }
+    if universe is not None and len(universe) > 1:
+        stats["univ_cagr"] = cagr(universe)
+        stats["excess_cagr_vs_univ"] = stats["port_cagr"] - stats["univ_cagr"]
+        stats["univ_total_return"] = total_return(universe)
+        stats["univ_vol"] = annual_vol(universe)
+        stats["univ_sharpe"] = sharpe(universe, rf_annual)
+        stats["univ_max_drawdown"] = max_drawdown(universe)[0]
     if holdings is not None:
         stats["hit_rate"] = hit_rate(holdings)
         stats["avg_turnover"] = turnover(holdings)

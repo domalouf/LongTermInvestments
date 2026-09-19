@@ -190,7 +190,8 @@ _CAVEATS = """
 <ul>
   <li><strong>Universe:</strong> companies whose latest 10-K was filed on or before
       the as-of date, one row each, with a ticker, positive revenue and above the
-      market-cap floor.</li>
+      market-cap floor; commodity and crypto trusts are left out. Each filing&rsquo;s
+      per-share figures are restated for any stock split since it was filed.</li>
   <li><strong>Fair value</strong> is the median of the DCF, Lynch, Graham (&times;2),
       DDM and EPV models that produced a number; <em>upside</em> is fair value
       &divide; price &minus; 1. Ranked by upside, descending; upsides above +500%

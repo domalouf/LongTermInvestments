@@ -87,9 +87,13 @@ def rank(snapshot: pd.DataFrame, spec: ScreenSpec) -> pd.DataFrame:
     return df
 
 
-def select(snapshot: pd.DataFrame, spec: ScreenSpec) -> list[str]:
-    ranked = rank(snapshot, spec)
+def top_picks(ranked: pd.DataFrame, top_n: int) -> list[str]:
+    """The first ``top_n`` tickers of a :func:`rank` result, de-duplicated."""
     if ranked.empty or "ticker" not in ranked.columns:
         return []
-    picks = ranked.loc[ranked["ticker"].notna(), "ticker"].head(spec.top_n)
+    picks = ranked.loc[ranked["ticker"].notna(), "ticker"].head(top_n)
     return list(dict.fromkeys(picks.tolist()))
+
+
+def select(snapshot: pd.DataFrame, spec: ScreenSpec) -> list[str]:
+    return top_picks(rank(snapshot, spec), spec.top_n)
