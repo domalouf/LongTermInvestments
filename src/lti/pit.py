@@ -201,6 +201,11 @@ def priced_snapshot(
     price = prices_mod.prices_asof(px.close, snap["ticker"], asof)
     shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else pd.Series(np.nan, index=snap.index)
     snap = metrics.add_price_metrics(snap, price=price, market_cap=price * shares)
+    # 12-1 momentum (Jegadeesh & Titman): the total return from a year ago to a
+    # month ago, skipping the last month's short-term reversal
+    then = prices_mod.prices_asof(px.adj, snap["ticker"], asof - pd.DateOffset(months=12))
+    recent = prices_mod.prices_asof(px.adj, snap["ticker"], asof - pd.DateOffset(months=1))
+    snap["momentum_12_1"] = recent / then.where(then > 0) - 1.0
     if with_history:
         from lti import history, valuation  # both build on this module
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -18,6 +19,9 @@ class ScreenSpec:
     top_n: int = 10
     weights: list[float] | None = None
     filters: dict = field(default_factory=dict)
+    # share of the metrics a company must have to be ranked; its composite then
+    # averages over the ones it has. 1.0 (the default) needs every one.
+    min_coverage: float = 1.0
 
     def directions(self) -> list[bool]:
         if self.ascending is not None:
@@ -73,23 +77,27 @@ def _drop_sector(df: pd.DataFrame, flag_col: str, classify) -> pd.DataFrame:
 
 def rank(snapshot: pd.DataFrame, spec: ScreenSpec) -> pd.DataFrame:
     df = _apply_filters(snapshot, spec.filters).copy()
-    df = df.dropna(subset=[m for m in spec.metrics if m in df.columns])
 
     missing = [m for m in spec.metrics if m not in df.columns]
     if missing:
         raise KeyError(f"metrics not in snapshot: {missing}")
+    need = max(1, math.ceil(spec.min_coverage * len(spec.metrics)))
+    df = df[df[spec.metrics].notna().sum(axis=1) >= need]
     if df.empty:
         df["composite_score"] = []
         df["rank"] = []
         return df
 
     weights = spec.metric_weights()
-    composite = np.zeros(len(df))
+    total = np.zeros(len(df))
+    weight_seen = np.zeros(len(df))
     for metric, ascending, weight in zip(spec.metrics, spec.directions(), weights):
-        pct = df[metric].rank(pct=True, ascending=ascending)  # lower pct = better
-        composite += weight * pct.to_numpy()
+        pct = df[metric].rank(pct=True, ascending=ascending).to_numpy()  # lower pct = better
+        have = ~np.isnan(pct)
+        total += np.where(have, weight * pct, 0.0)
+        weight_seen += np.where(have, weight, 0.0)
 
-    df["composite_score"] = composite
+    df["composite_score"] = total / weight_seen
     tiebreak = df["ticker"] if "ticker" in df.columns else df.index.to_series().astype("string")
     df = df.assign(_tb=tiebreak.values).sort_values(["composite_score", "_tb"]).drop(columns="_tb")
     df["rank"] = np.arange(1, len(df) + 1)

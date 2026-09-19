@@ -182,6 +182,46 @@ def cmd_factor_ic(args: argparse.Namespace) -> None:
             print("  ", w)
 
 
+def cmd_factor_study(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import study
+
+    r = study.run_study(
+        market_cap_min=args.market_cap_min * 1e6,
+        backtest_cap_min=args.backtest_cap_min * 1e6,
+        top_n=args.top_n,
+        month_spread=not args.no_month_spread,
+    )
+    print("\n=== pre-registered factor study: rank IC vs 12-month forward return ===")
+    print("monthly as-of dates, Newey-West t; operating companies, financials and BDCs out.")
+    print("IC and t are signed: positive means the factor worked the way its paper said.\n")
+    t = r.table.copy()
+    for c in ("first_ic", "second_ic"):
+        t[c] = t[c].map(lambda v: f"{v:+.3f}" if pd.notna(v) else "—")
+    for c in ("first_t", "second_t"):
+        t[c] = t[c].map(lambda v: f"{v:+.1f}" if pd.notna(v) else "—")
+    t["in_screen"] = t["in_screen"].map({True: "yes", False: ""})
+    t = t.rename(columns={"first_ic": "IC 2011-18", "first_t": "t", "second_ic": "IC 2019-25", "second_t": "t "})
+    print(t.to_string())
+
+    print(f"\nfinal screen (chosen on the first half only): {', '.join(r.selected) or 'nothing qualified'}")
+    if not r.screen.empty:
+        print(f"  second-half IC {r.screen['mean_ic']:+.3f} (t {r.screen['t_stat_nw']:+.1f})")
+    for half, s in r.backtests.items():
+        tag = " (in-sample)" if half == "first half" else ""
+        print(
+            f"  backtest, {half}{tag}: {s['port_cagr']:.1%} a year vs {s['univ_cagr']:.1%} for its universe "
+            f"({s['excess_cagr_vs_univ']:+.1%}), SPY {s['bench_cagr']:.1%}"
+        )
+    if not r.month_spread.empty:
+        ex = r.month_spread["excess_vs_univ"]
+        print(
+            f"  second half, by rebalance month vs universe: {ex.min():+.1%} to {ex.max():+.1%} "
+            f"(median {ex.median():+.1%}), ahead in {int((ex > 0).sum())} of {len(ex)} months"
+        )
+
+
 def cmd_undervalued(args: argparse.Namespace) -> None:
     import pandas as pd
 
@@ -344,6 +384,16 @@ def build_parser() -> argparse.ArgumentParser:
     fi.add_argument("--quantiles", type=int, default=5)
     fi.add_argument("--method", choices=["spearman", "pearson"], default="spearman")
     fi.set_defaults(func=cmd_factor_ic)
+
+    fs = sub.add_parser(
+        "factor-study",
+        help="pre-registered test of published factors: chosen on 2011-18, judged on 2019-25",
+    )
+    fs.add_argument("--market-cap-min", type=float, default=500.0, help="IC universe floor ($M)")
+    fs.add_argument("--backtest-cap-min", type=float, default=1000.0, help="backtest universe floor ($M)")
+    fs.add_argument("--top-n", type=int, default=30, help="names the final screen's backtest holds")
+    fs.add_argument("--no-month-spread", action="store_true", help="skip the 12-month rebalance spread")
+    fs.set_defaults(func=cmd_factor_study)
 
     uv = sub.add_parser("undervalued", help="most undervalued names by blended intrinsic value")
     uv.add_argument("--asof", default=None, help="date (default today)")

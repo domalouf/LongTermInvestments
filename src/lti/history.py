@@ -34,6 +34,19 @@ isn't known yet — and summarizes it per company:
 ``eps_vs_norm``
     the latest year's EPS against the normal one; far above 1 is a peak or a
     one-off, far below a trough.
+
+And from the latest year against the one before it:
+
+``share_growth``
+    the change in the share count, restated for splits (Pontiff & Woodgate,
+    2008: issuers underperform, buyers-back outperform).
+``asset_growth``
+    the change in total assets (Cooper, Gulen & Schill, 2008: fast asset
+    growers underperform).
+``f_score``
+    Piotroski's (2000) nine-point financial-strength score. Operating margin
+    stands in for gross margin (unreliable in this data), and leverage is
+    non-current liabilities over assets, scored as a pass when it didn't rise.
 """
 
 from __future__ import annotations
@@ -111,7 +124,72 @@ def summarize_history(hist: pd.DataFrame, splits: pd.DataFrame | None = None, mi
 
     latest = h.drop_duplicates("cik", keep="last").set_index("cik")["eps_restated"]  # the latest year, even if blank
     out["eps_vs_norm"] = latest / out["eps_norm"].where(out["eps_norm"] > 0)
+
+    year = _latest_two_years(h, splits)
+    out["share_growth"] = year["shares"] / year["shares_prev"] - 1.0
+    out["asset_growth"] = year["assets"] / year["assets_prev"] - 1.0
+    out["f_score"] = _piotroski(year)
     return out
+
+
+_CHANGE_COLS = [
+    "shares", "assets", "net_income", "cfo", "liabilities_noncurrent",
+    "assets_current", "liabilities_current", "revenues", "ebit",
+]
+
+
+def _latest_two_years(h: pd.DataFrame, splits: pd.DataFrame | None) -> pd.DataFrame:
+    """Each company's latest fiscal year, with ``<col>_prev`` from the year before —
+    NaN unless the two periods are a year apart."""
+    h = h.copy()
+    h["shares"] = (
+        h["shares_outstanding"] * pit.split_factor_after(h["ticker"], h["filed"], splits)
+        if {"shares_outstanding", "ticker", "filed"} <= set(h.columns)
+        else np.nan
+    )
+    if "ebit" not in h.columns and {"operating_income_reported", "operating_income"} & set(h.columns):
+        h["ebit"] = metrics.ebit(h)
+    for col in _CHANGE_COLS:
+        if col not in h.columns:
+            h[col] = np.nan
+    prev = h.groupby("cik", sort=False)[[*_CHANGE_COLS, "period_end"]].shift(1)
+    a_year = (h["period_end"] - prev["period_end"]).dt.days.between(300, 430)
+    for col in _CHANGE_COLS:
+        h[f"{col}_prev"] = prev[col].where(a_year)
+    return h.drop_duplicates("cik", keep="last").set_index("cik")
+
+
+def _piotroski(y: pd.DataFrame) -> pd.Series:
+    """Piotroski's F-score from :func:`_latest_two_years`; NaN when fewer than
+    seven of the nine signals can be scored."""
+    def ratio(a, b):
+        return a / b.where(b > 0)
+
+    roa, roa_prev = ratio(y["net_income"], y["assets"]), ratio(y["net_income_prev"], y["assets_prev"])
+    lev, lev_prev = ratio(y["liabilities_noncurrent"], y["assets"]), ratio(y["liabilities_noncurrent_prev"], y["assets_prev"])
+    cr, cr_prev = ratio(y["assets_current"], y["liabilities_current"]), ratio(y["assets_current_prev"], y["liabilities_current_prev"])
+    margin, margin_prev = ratio(y["ebit"], y["revenues"]), ratio(y["ebit_prev"], y["revenues_prev"])
+    turn, turn_prev = ratio(y["revenues"], y["assets"]), ratio(y["revenues_prev"], y["assets_prev"])
+
+    def signal(passed: pd.Series, *inputs: pd.Series) -> pd.Series:
+        known = pd.concat(inputs, axis=1).notna().all(axis=1)
+        return passed.astype("float64").where(known)
+
+    signals = pd.concat(
+        [
+            signal(roa > 0, roa),
+            signal(y["cfo"] > 0, y["cfo"]),
+            signal(roa > roa_prev, roa, roa_prev),
+            signal(y["cfo"] > y["net_income"], y["cfo"], y["net_income"]),
+            signal(lev <= lev_prev, lev, lev_prev),
+            signal(cr > cr_prev, cr, cr_prev),
+            signal(y["shares"] <= y["shares_prev"], y["shares"], y["shares_prev"]),
+            signal(margin > margin_prev, margin, margin_prev),
+            signal(turn > turn_prev, turn, turn_prev),
+        ],
+        axis=1,
+    )
+    return signals.sum(axis=1).where(signals.notna().sum(axis=1) >= 7)
 
 
 def add_history(

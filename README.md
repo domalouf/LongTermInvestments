@@ -67,6 +67,7 @@ lti backtest --magic-formula --top-n 30 --start 2013-01-01
 
 # 4b. See which metrics actually rank stocks by forward return
 lti factor-ic --start 2012-01-01 --horizon 12 --step 12
+lti factor-study                 # the pre-registered test of published factors (~5 min, see below)
 
 # 4c. Today's most undervalued steady earners by blended intrinsic value (normalized earnings)
 lti undervalued --top 30 --market-cap-min 2000 --min-profit-years 4
@@ -266,6 +267,43 @@ lower values of the metric went with higher returns** (expected for `pe`, `pb`,
 the universe is survivorship-biased — see the caveats on the page. Also on the CLI as
 `lti factor-ic`.
 
+### What works in this data — a pre-registered test (`lti factor-study`)
+Choosing a strategy and judging it on the same data flatters it, so `lti.study` fixes
+everything in code first: sixteen hypotheses, each with the direction its paper found
+(profitability, cash profitability, accruals, share issuance, asset growth, shareholder
+yield, 12-1 momentum, Piotroski F-score, Altman Z, four value ratios and three
+composites); the universe ($500M+ operating companies, financials and BDCs out); the test
+(monthly as-of dates, 12-month forward returns, rank IC, Newey-West t for the overlap); and
+the split — April 2011 to March 2018 chooses, April 2019 on judges. The one decision made
+from data: a final screen of the single factors that pointed the expected way in the first
+half. Results as of September 2026 (IC signed so that positive = as the paper said):
+
+| | 2011–18 IC (t) | 2019–25 IC (t) |
+|---|---|---|
+| **Held up in both halves** | | |
+| share issuance (buybacks good) | +0.058 (4.3) | +0.102 (2.6) |
+| shareholder yield | +0.049 (2.0) | +0.099 (2.1) |
+| Piotroski F-score | +0.025 (1.9) | +0.052 (1.9) |
+| **Worked only in 2019–25** | | |
+| operating / cash profitability | −0.005 / −0.003 | +0.094 (2.9) / +0.083 (2.8) |
+| quality composite · quality + value | −0.007 · 0.000 | +0.067 (3.0) · +0.092 (2.3) |
+| **Weak both times** | | |
+| earnings yield, EBIT/EV, FCF yield, book/market, value composite, momentum, asset growth | −0.030 to +0.028 | +0.011 to +0.087 (t ≤ 1.7) |
+| **Wrong way both times** | | |
+| accruals, Altman Z | −0.018, −0.020 | −0.013, −0.001 |
+
+The final screen the first half chose — share issuance, asset growth, shareholder yield
+and F-score — kept a positive IC out of sample (+0.097, t 2.0), and its top half of stocks
+beat its bottom half by about two points a year. But a **top-30 portfolio of it trailed its
+own universe by 3.6% a year in 2019–25**, ahead in 1 of 12 rebalance months (in-sample,
+2011–18, it had beaten it by 5.0%). The names that score well on all four at once are
+shrinking cash-returners — Macy's, Kohl's, Best Buy, Western Union, Lumen, Sirius — much of
+it in industries in decline, so the portfolio rides one theme. The signals are real across
+the market; a concentrated screen on them isn't a way to collect them. Caveats: two
+seven-year halves, a survivor-only universe (which flatters distressed stocks and so
+works against Altman Z and quality in the first half), and published factors typically
+lose much of their edge after publication.
+
 ### 🔬 Stock detail — one company over time
 Sidebar: **Ticker** (matches the primary symbol *and* the full `tickers_all` list, so
 `JPM` resolves), **Log price axis**, **Mark 10-K filing dates**, **Split-adjust EPS /
@@ -365,7 +403,8 @@ src/lti/
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard
   cli.py           `lti` command-line entry point
-  factor.py        cross-sectional IC of each metric vs forward return
+  factor.py        cross-sectional IC of each metric (and composites) vs forward return, Newey-West t
+  study.py         the pre-registered factor test: hypotheses fixed in code, 2011-18 chooses, 2019-25 judges
   stock.py         one company's annual fundamentals + valuation time series
   app/             Streamlit UI
     Home.py        entry point: page config, theme, navigation

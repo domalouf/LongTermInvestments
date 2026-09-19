@@ -106,19 +106,21 @@ except (RuntimeError, FileNotFoundError) as exc:
 if step < horizon:
     st.warning(
         f"As-of spacing ({step}m) is shorter than the horizon ({horizon}m): forward-return "
-        "windows overlap, so the t-stats below are optimistic. Set spacing ≥ horizon for clean stats."
+        "windows overlap, so the plain t-stat is optimistic — read `t_stat_nw`, which allows for it."
     )
 
 st.subheader("Ranking power by metric")
 st.caption(
     "`mean_ic` — average cross-sectional correlation · `ic_ir` mean/std · "
-    "`t_stat` significance across periods · `hit_rate` share of periods with the dominant sign · "
+    "`t_stat` significance across periods · `t_stat_nw` the same with Newey-West errors, which "
+    "allow for overlapping return windows (read this one when spacing < horizon) · "
+    "`hit_rate` share of periods with the dominant sign · "
     "`q_spread` top-minus-bottom bucket forward return · `monotonicity` rank corr of bucket index vs return."
 )
 st.dataframe(
     summary.reset_index(names="metric").style.format(
         {
-            "mean_ic": "{:.3f}", "ic_std": "{:.3f}", "ic_ir": "{:.2f}", "t_stat": "{:.2f}",
+            "mean_ic": "{:.3f}", "ic_std": "{:.3f}", "ic_ir": "{:.2f}", "t_stat": "{:.2f}", "t_stat_nw": "{:.2f}",
             "hit_rate": "{:.0%}", "avg_n_stocks": "{:.0f}", "q_spread": "{:.1%}", "monotonicity": "{:.2f}",
         },
         na_rep="—",

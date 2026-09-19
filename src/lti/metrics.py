@@ -21,9 +21,25 @@ FUNDAMENTAL_METRICS = [
     "revenue_growth_1y",
     "eps_growth_1y",
     "fcf_margin",
+    "op_profitability",
+    "cash_profitability",
+    "accruals",
 ]
 
-PRICE_METRICS = ["pe", "pb", "earnings_yield", "ebit_ev", "peg"]
+PRICE_METRICS = [
+    "pe",
+    "pb",
+    "earnings_yield",
+    "ebit_ev",
+    "peg",
+    "fcf_yield",
+    "ebitda_ev",
+    "sales_ev",
+    "book_to_market",
+    "shareholder_yield",
+    "altman_z",
+    "momentum_12_1",  # needs the price history, so lti.pit adds it
+]
 
 # From several years of filings rather than the latest one (lti.history): the
 # normalized versions of the valuation ratios, and how consistent the business is.
@@ -35,6 +51,9 @@ HISTORY_METRICS = [
     "revenue_cagr",
     "fcf_conversion",
     "roic_median",
+    "share_growth",
+    "asset_growth",
+    "f_score",
 ]
 
 # Blended intrinsic-value upside (lti.valuation): on normalized earnings, and on
@@ -42,7 +61,7 @@ HISTORY_METRICS = [
 VALUATION_METRICS = ["fair_value_upside", "fair_value_upside_1y"]
 
 # lower value = "better" (used as the default sort direction in ranking)
-LOWER_IS_BETTER = {"pe", "pb", "debt_to_equity", "peg", "pe_norm"}
+LOWER_IS_BETTER = {"pe", "pb", "debt_to_equity", "peg", "pe_norm", "accruals", "share_growth", "asset_growth"}
 
 
 def needs_history(names) -> bool:
@@ -115,7 +134,36 @@ def add_fundamental_metrics(df: pd.DataFrame) -> pd.DataFrame:
         df["book_value_per_share"] = _safe_div(df["equity"], df["shares_outstanding"])
 
     df = add_capital_metrics(df)
+    df = add_quality_metrics(df)
 
+    return df
+
+
+def add_quality_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Profitability and earnings quality, each scaled by total assets.
+
+    ``op_profitability``
+        operating income / assets — Novy-Marx's gross profitability, on
+        operating income because gross profit is unreliable in this data.
+    ``cash_profitability``
+        operating cash flow / assets (Ball et al., 2016): profitability that
+        accruals can't flatter.
+    ``accruals``
+        (net income − operating cash flow) / assets (Sloan, 1996): the part of
+        earnings that didn't arrive as cash. Lower is better.
+    """
+    if "assets" not in df.columns:
+        return df
+    df = df.copy()
+    assets = df["assets"].where(df["assets"] > 0)
+    if "ebit" not in df.columns and "operating_income" in df.columns:
+        df["ebit"] = ebit(df)
+    if "ebit" in df.columns:
+        df["op_profitability"] = _safe_div(df["ebit"], assets)
+    if "cfo" in df.columns:
+        df["cash_profitability"] = _safe_div(df["cfo"], assets)
+        if "net_income" in df.columns:
+            df["accruals"] = _safe_div(df["net_income"] - df["cfo"], assets)
     return df
 
 
@@ -183,7 +231,53 @@ def add_price_metrics(
         df["market_cap"] = price * df["shares_outstanding"]
 
     df = add_enterprise_value(df)
+    df = add_yield_metrics(df)
 
+    return df
+
+
+def add_yield_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """The value composite's other yields, and the Altman Z-score.
+
+    ``fcf_yield`` free cash flow / market cap · ``ebitda_ev`` (EBIT + D&A) / EV ·
+    ``sales_ev`` revenue / EV · ``book_to_market`` equity / market cap ·
+    ``shareholder_yield`` (dividends + buybacks) / market cap — what the company
+    handed back; a payout that isn't tagged counts as none, as long as the
+    cash-flow statement is there.
+
+    ``altman_z`` is Altman's (1968) distress score, 1.2·WC/TA + 1.4·RE/TA +
+    3.3·EBIT/TA + 0.6·MVE/TL + 1.0·Sales/TA; below ~1.8 is the distress zone.
+    """
+    if "market_cap" not in df.columns:
+        return df
+    df = df.copy()
+    mcap = df["market_cap"].where(df["market_cap"] > 0)
+    ev = df["enterprise_value"] if "enterprise_value" in df.columns else pd.Series(np.nan, index=df.index)
+
+    if "free_cash_flow" in df.columns:
+        df["fcf_yield"] = _safe_div(df["free_cash_flow"], mcap)
+    if {"ebit", "dep_amort"} <= set(df.columns):
+        df["ebitda_ev"] = _safe_div(df["ebit"] + df["dep_amort"], ev)
+    if "revenues" in df.columns:
+        df["sales_ev"] = _safe_div(df["revenues"], ev)
+    if "equity" in df.columns:
+        df["book_to_market"] = _safe_div(df["equity"].where(df["equity"] > 0), mcap)
+    if "cfo" in df.columns:
+        paid = sum(
+            df[c].abs().fillna(0.0) if c in df.columns else 0.0 for c in ("dividends_paid", "buybacks")
+        )
+        df["shareholder_yield"] = _safe_div(paid, mcap).where(df["cfo"].notna())
+
+    need = {"assets", "assets_current", "liabilities_current", "retained_earnings", "ebit", "liabilities", "revenues"}
+    if need <= set(df.columns):
+        ta = df["assets"].where(df["assets"] > 0)
+        df["altman_z"] = (
+            1.2 * (df["assets_current"] - df["liabilities_current"]) / ta
+            + 1.4 * df["retained_earnings"] / ta
+            + 3.3 * df["ebit"] / ta
+            + 0.6 * _safe_div(mcap, df["liabilities"].where(df["liabilities"] > 0))
+            + 1.0 * df["revenues"] / ta
+        ).replace([np.inf, -np.inf], np.nan)
     return df
 
 

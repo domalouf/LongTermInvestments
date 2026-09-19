@@ -38,6 +38,7 @@ def _config(cfg_key: str) -> BacktestConfig:
         top_n=raw["top_n"],
         weights=raw.get("weights"),
         filters=raw.get("filters", {}),
+        min_coverage=raw.get("min_coverage", 1.0),
     )
     return BacktestConfig(
         screen=spec,
@@ -80,6 +81,13 @@ with st.sidebar:
     )
     if magic:
         chosen = list(MAGIC_FORMULA_METRICS)
+    coverage = 100
+    if len(chosen) > 2:
+        coverage = st.slider(
+            "Rank companies with at least … % of the metrics", 50, 100, 100, step=10,
+            help="100% needs every metric, which shrinks the universe as the list grows. Lower, "
+                 "a company ranks on the average of the metrics it has.",
+        )
     top_n = st.slider("Top N", 5, 50, 30 if magic else 10)
     start = st.text_input("Start", "2013-01-01")
     end = st.text_input("End", "2024-01-01")
@@ -108,6 +116,7 @@ cfg_key = json.dumps(
         "market_cap_min": cap_floor_m * 1e6,
         "initial_capital": capital,
         "filters": {"exclude_financials": excl_fin, "exclude_utilities": excl_util},
+        "min_coverage": coverage / 100,
     }
 )
 

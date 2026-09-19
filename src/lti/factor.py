@@ -15,13 +15,14 @@ values of the metric went with higher forward returns (expected for ``pe``,
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
-from lti import metrics, pit, prices as prices_mod
-from lti.metrics import FUNDAMENTAL_METRICS, HISTORY_METRICS, PRICE_METRICS, VALUATION_METRICS
+from lti import metrics, pit, prices as prices_mod, sectors
+from lti.metrics import FUNDAMENTAL_METRICS, HISTORY_METRICS, LOWER_IS_BETTER, PRICE_METRICS, VALUATION_METRICS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +39,9 @@ class ICConfig:
     market_cap_min: float = 500_000_000.0
     require_positive_eps: bool = False
     operating_only: bool = True  # drop commodity trusts, shells and other non-businesses
+    exclude_financials: bool = False  # banks, insurers, REITs and BDCs
+    # name -> component metrics (or earlier composites), scored within the universe
+    composites: dict[str, list[str]] = field(default_factory=dict)
     quantiles: int = 5
     method: str = "spearman"   # "spearman" (rank IC) | "pearson"
     winsorize: float = 0.01    # per-period tail clip on forward returns (and on the
@@ -93,9 +97,37 @@ def _bucket_means(metric: pd.Series, fwd: pd.Series, q: int) -> pd.Series | None
     return out
 
 
+def composite_score(snap: pd.DataFrame, components: list[str], min_share: float = 0.5) -> pd.Series:
+    """Mean percentile rank across ``components``, each oriented so higher is
+    better (:data:`LOWER_IS_BETTER` metrics are ranked the other way).
+
+    Ranked within ``snap`` — the universe the score is used in. A company needs at
+    least ``min_share`` of the components to get a score, so one missing input
+    doesn't drop it but a mostly-missing row doesn't count.
+    """
+    present = [c for c in components if c in snap.columns]
+    if not present:
+        return pd.Series(np.nan, index=snap.index)
+    ranks = pd.concat(
+        [snap[c].replace([np.inf, -np.inf], np.nan).rank(pct=True, ascending=c not in LOWER_IS_BETTER) for c in present],
+        axis=1,
+    )
+    enough = ranks.notna().sum(axis=1) >= max(1, math.ceil(min_share * len(components)))
+    return ranks.mean(axis=1).where(enough)
+
+
+def _component_metrics(cfg: ICConfig) -> list[str]:
+    """Every metric the config ranks on, composites expanded to their parts."""
+    names = [m for m in cfg.metrics if m not in cfg.composites]
+    for parts in cfg.composites.values():
+        names += [p for p in parts if p not in cfg.composites]
+    return names
+
+
 def _prepare_snapshot(fund: pd.DataFrame, px: prices_mod.PriceData, asof: pd.Timestamp, cfg: ICConfig) -> pd.DataFrame:
     snap = pit.priced_snapshot(
-        fund, asof, px, operating_only=cfg.operating_only, with_history=metrics.needs_history(cfg.metrics)
+        fund, asof, px, operating_only=cfg.operating_only,
+        with_history=metrics.needs_history(_component_metrics(cfg)),
     )
     if snap.empty:
         return snap
@@ -104,10 +136,38 @@ def _prepare_snapshot(fund: pd.DataFrame, px: prices_mod.PriceData, asof: pd.Tim
         snap = snap[snap["market_cap"] >= cfg.market_cap_min]
     if cfg.require_positive_eps and "eps" in snap.columns:
         snap = snap[snap["eps"] > 0]
+    if cfg.exclude_financials:
+        if "is_financial" in snap.columns:
+            snap = snap[~snap["is_financial"].fillna(False).astype(bool)]
+        if "sic" in snap.columns:
+            snap = snap[~sectors.is_investment_company(snap["sic"])]
+    for name, parts in cfg.composites.items():  # in order, so a composite can build on an earlier one
+        snap = snap.assign(**{name: composite_score(snap, parts)})
     return snap
 
 
-def _summarize(ic_by_period: pd.DataFrame, n_by_period: pd.DataFrame, bucket_returns: pd.DataFrame) -> pd.DataFrame:
+def newey_west_t(series: pd.Series, lags: int) -> float:
+    """t-stat of the mean with Newey-West (Bartlett) standard errors.
+
+    Monthly as-of dates with 12-month returns overlap by 11 months, so
+    neighbouring ICs share most of their returns; the plain t-stat treats them
+    as independent and overstates the evidence roughly threefold.
+    """
+    x = series.dropna().to_numpy(dtype="float64")
+    n = len(x)
+    if n < 3:
+        return float("nan")
+    e = x - x.mean()
+    var = e @ e / n
+    for lag in range(1, min(lags, n - 1) + 1):
+        var += 2 * (1 - lag / (lags + 1)) * (e[lag:] @ e[:-lag]) / n
+    se = math.sqrt(var / n) if var > 0 else 0.0
+    return float(x.mean() / se) if se > 0 else float("nan")
+
+
+def _summarize(
+    ic_by_period: pd.DataFrame, n_by_period: pd.DataFrame, bucket_returns: pd.DataFrame, nw_lags: int = 0
+) -> pd.DataFrame:
     rows: dict[str, dict] = {}
     for m in ic_by_period.columns:
         ic = ic_by_period[m].dropna()
@@ -121,6 +181,7 @@ def _summarize(ic_by_period: pd.DataFrame, n_by_period: pd.DataFrame, bucket_ret
             "ic_std": std_ic,
             "ic_ir": mean_ic / std_ic if std_ic else np.nan,
             "t_stat": mean_ic / (std_ic / np.sqrt(n)) if std_ic else np.nan,
+            "t_stat_nw": newey_west_t(ic, nw_lags),
             "hit_rate": float(np.mean(np.sign(ic) == np.sign(mean_ic))) if mean_ic else np.nan,
             "n_periods": n,
             "avg_n_stocks": float(n_by_period[m].dropna().mean()) if m in n_by_period else np.nan,
@@ -173,11 +234,12 @@ def compute_ic(
     if cfg.step_months < cfg.horizon_months:
         warnings.append(
             f"as-of step ({cfg.step_months}m) is shorter than the return horizon "
-            f"({cfg.horizon_months}m): forward-return windows overlap, so t-stats are optimistic."
+            f"({cfg.horizon_months}m): forward-return windows overlap, so the plain t-stat is "
+            "optimistic — read t_stat_nw."
         )
 
-    metrics_wanted = [m for m in cfg.metrics if m in ALL_METRICS]
-    unknown = [m for m in cfg.metrics if m not in ALL_METRICS]
+    metrics_wanted = [m for m in cfg.metrics if m in ALL_METRICS or m in cfg.composites]
+    unknown = [m for m in cfg.metrics if m not in metrics_wanted]
     if unknown:
         warnings.append(f"ignored unknown metrics: {unknown}")
     if not metrics_wanted:
@@ -230,5 +292,7 @@ def compute_ic(
     if not bucket_returns.empty:
         bucket_returns.columns = [f"Q{c}" for c in bucket_returns.columns]
 
-    summary = _summarize(ic_by_period, n_by_period, bucket_returns)
+    # overlapping forward-return windows: as many lags as the overlap spans
+    nw_lags = max(0, math.ceil(cfg.horizon_months / cfg.step_months) - 1)
+    summary = _summarize(ic_by_period, n_by_period, bucket_returns, nw_lags)
     return ICResult(summary, ic_by_period, n_by_period, bucket_returns, list(dict.fromkeys(warnings)))
