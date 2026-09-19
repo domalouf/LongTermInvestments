@@ -61,6 +61,7 @@ lti refresh-prices              # later: cheap daily top-up of already-cached ti
 # 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe)
 lti backtest --metrics pe,debt_to_equity --top-n 10 --start 2011-01-01
 lti backtest --metrics pe,debt_to_equity --top-n 10 --all-months   # the same, once per rebalance month
+lti rolling-backtest --metrics pe,debt_to_equity --top-n 10 --windows 3,5   # over every 3- and 5-year window
 
 # 4a. Greenblatt's Magic Formula (EBIT/EV + return on capital, no financials/utilities)
 lti backtest --magic-formula --top-n 30 --start 2013-01-01
@@ -152,7 +153,7 @@ streamlit run src/lti/app/Home.py          # opens http://localhost:8501
 
 **Undervalued today is the landing page.** The sidebar groups the rest by what you're
 there to do: *Find something to buy* (Undervalued, Stock detail), *Test an idea*
-(Screener, Backtest, Factor analysis), *Keep score* (Track record, Decision journal)
+(Screener, Backtest, Rolling backtest, Factor analysis), *Keep score* (Track record, Decision journal)
 and *Housekeeping* (Data health). Leave
 `LTI_SMOKE` unset to use the full `fundamentals.parquet`.
 
@@ -249,6 +250,20 @@ strategy run once per month — with a dozen annual rebalances, the month alone 
 whether a screen beats its universe), the per-period summary, a holdings expander (every
 pick with the metric values it was ranked on, + CSV), and a warnings expander. Results
 are cached per exact config.
+
+### 🔁 Rolling backtest — the same strategy over every window
+One backtest is one draw from history, and easy to fit to. This reruns it over every
+window of each chosen length — every 3-year and every 5-year stretch of the price
+history, say, starting a year apart — and asks how often the strategy beat its universe
+and SPY. Sidebar: the strategy as on the Backtest page, plus **Window lengths**, **Step
+between window starts** and an optional **Earliest start / Latest end** (blank = all the
+price history). Body: a summary per window length (median, worst and best CAGR; the
+average gap to the universe and to SPY, and how often each was beaten; drawdown and
+Sharpe), a box plot of each window's gap to the universe, every window + CSV, and a
+warnings expander. Also on the CLI as `lti rolling-backtest`. Windows of one length
+overlap heavily — at a 12-month step, neighbouring 5-year windows share four years — so
+read the spread as illustrative rather than as independent samples; and every window
+carries the backtest's survivorship bias, which is why the universe is the yardstick.
 
 ### 📐 Factor analysis — which metrics predict returns
 Sidebar: **Metrics**, **Start/End** (as-of dates repeat on the start's day of year —
@@ -440,6 +455,7 @@ src/lti/
   pit.py           point-in-time snapshots: split-correct, operating companies, priced
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine, universe benchmark, rebalance-month spread
+  rolling.py       reruns the backtest over every N-year window in the price history
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard
   cli.py           `lti` command-line entry point
@@ -451,7 +467,8 @@ src/lti/
   app/             Streamlit UI
     Home.py        entry point: page config, theme, navigation
     theme.py       palette + Plotly chrome + page furniture (import this, not raw styling)
-    views/         Undervalued, Stock, Screener, Backtest, Factor analysis, Track record, Journal, Data health
+    views/         Undervalued, Stock, Screener, Backtest, Rolling backtest, Factor analysis,
+                   Track record, Journal, Data health
 deploy/            nightly publish of the public "undervalued today" snapshot (see deploy/README.md)
 tests/             pure-logic unit tests (no network / SEC data)
 ```

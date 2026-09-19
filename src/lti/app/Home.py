@@ -29,6 +29,7 @@ nav = st.navigation(
         "Test an idea": [
             st.Page("views/screener.py", title="Screener", icon="🔎"),
             st.Page("views/backtest.py", title="Backtest", icon="🧪"),
+            st.Page("views/rolling_backtest.py", title="Rolling backtest", icon="🔁"),
             st.Page("views/factor_analysis.py", title="Factor analysis", icon="📐"),
         ],
         "Keep score": [
