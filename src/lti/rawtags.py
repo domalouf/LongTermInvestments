@@ -3,8 +3,10 @@
 The standardized balance-sheet bag stops at the Assets / Liabilities / Equity
 aggregates (see :data:`lti.fundamentals.BS_MAP`). That is not enough for
 Greenblatt-style capital metrics: enterprise value needs interest-bearing debt,
-and return on capital needs net fixed assets. Both live in the raw ``num.txt``.
-SIC — needed for the financials / utilities exclusions — lives in ``sub.txt``.
+and return on capital needs net fixed assets. Both live in the raw ``num.txt``,
+as do the share counts the standardized income statement misses for filers that
+footnote their weighted average. SIC — needed for the financials / utilities
+exclusions — lives in ``sub.txt``.
 
 Both files are already on disk as parquet under ``data/sec/parquet/quarter/``,
 one directory per quarter zip, so this module reads them directly rather than
@@ -393,3 +395,271 @@ def build_raw_is_tags(force: bool = False) -> pd.DataFrame:
     df.to_parquet(out_path, index=False)
     LOGGER.info("rawtags: wrote %d rows -> %s", len(df), out_path)
     return df
+
+
+# --- share counts -------------------------------------------------------------
+
+# The standardized income statement carries a weighted-average share count only
+# when the filer presents one on the *face* of the income statement, and the SEC
+# financial statement data sets hold nothing from the footnotes. Procter & Gamble,
+# Chevron, Merck, Alphabet and plenty more put it in the EPS footnote — which left
+# about a quarter of $10B+ companies with no share count and so no market cap. The
+# balance sheet (or the common-stock column of the equity statement beside it)
+# still carries the count at the period end.
+# Partnerships (Energy Transfer, Enterprise Products, Plains) count units, not shares.
+SHARE_OUTSTANDING_TAGS = ["CommonStockSharesOutstanding", "LimitedPartnersCapitalAccountUnitsOutstanding"]
+SHARE_ISSUED_TAGS = ["CommonStockSharesIssued", "LimitedPartnersCapitalAccountUnitsIssued"]
+SHARE_TREASURY_TAGS = ["TreasuryStockCommonShares", "TreasuryStockShares"]
+SHARE_INSTANT_TAGS = [*SHARE_OUTSTANDING_TAGS, *SHARE_ISSUED_TAGS, *SHARE_TREASURY_TAGS]
+SHARE_WAVG_TAGS = [
+    "WeightedAverageNumberOfSharesOutstandingBasic",
+    "WeightedAverageNumberOfDilutedSharesOutstanding",
+    "WeightedAverageLimitedPartnershipUnitsOutstanding",
+]
+
+# the common-stock (or common-unit) column of the equity statement: the whole count
+_EQUITY_COMPONENT = (
+    r"(?:EquityComponents=Common(?:Stock|Units)[A-Za-z]*|LimitedPartnersCapitalAccountByClass=CommonUnits);?"
+)
+_CLASS_OF_STOCK = r"ClassOfStock=([^;]+)"
+
+
+def _share_kind(segments: pd.Series) -> pd.Series:
+    """``total`` (no dimension), ``equity`` (the common-stock column of the equity
+    statement — the same count), ``class`` (one share class) or ``other``."""
+    seg = segments.fillna("").astype(str)
+    return pd.Series(
+        np.select(
+            [seg.eq(""), seg.str.fullmatch(_EQUITY_COMPONENT), seg.str.contains("ClassOfStock=", regex=False)],
+            ["total", "equity", "class"],
+            default="other",
+        ),
+        index=segments.index,
+    )
+
+
+def _summarize_shares(rows: pd.DataFrame) -> pd.DataFrame:
+    """One row per ``adsh`` from raw share-count facts (``adsh, tag, segments, value``),
+    each tag already at its latest date.
+
+    ``shares_bs``
+        shares outstanding at the balance-sheet date: the dimensionless value,
+        else the equity statement's common-stock column, else issued less
+        treasury. Zero counts as missing — filers use it for a class they list
+        but have none of.
+    ``shares_bs_direct``
+        ``shares_bs`` was tagged as outstanding rather than worked out from the
+        issued count — which overstates it whenever the treasury shares went
+        untagged (Boeing's issued count is 1.01B; about 760M are outstanding).
+    ``shares_wavg``
+        weighted-average basic (else diluted) shares for the year.
+    ``shares_multi_class``
+        the filing lists two or more share classes, so a single total may mix
+        classes with different economic weights. A filing that lists exactly
+        one class (Baker Hughes' Class A) is single-class: that class is the total.
+    """
+    rows = rows.assign(kind=_share_kind(rows["segments"]))
+
+    classes = rows[(rows["kind"] == "class") & rows["tag"].isin([*SHARE_OUTSTANDING_TAGS, *SHARE_ISSUED_TAGS])]
+    classes = classes.assign(share_class=classes["segments"].astype(str).str.extract(_CLASS_OF_STOCK, expand=False))
+    n_classes = classes.groupby("adsh")["share_class"].nunique()
+    sole_class = classes[classes["adsh"].map(n_classes).eq(1)]
+
+    # a dimensionless value first, then the equity statement's common-stock column
+    # (the same shares), then a filing's one and only class
+    whole = pd.concat([rows[rows["kind"].isin(["total", "equity"])], sole_class], ignore_index=True)
+    whole["_rank"] = whole["kind"].map({"total": 0, "equity": 1, "class": 2})
+    whole = whole.sort_values(["adsh", "tag", "_rank", "value"], ascending=[True, True, True, False])
+    wide = whole.drop_duplicates(["adsh", "tag"]).pivot(index="adsh", columns="tag", values="value")
+
+    outstanding = _coalesce(wide, SHARE_OUTSTANDING_TAGS)
+    issued = _coalesce(wide, SHARE_ISSUED_TAGS)
+    treasury = _coalesce(wide, SHARE_TREASURY_TAGS)
+    net_issued = issued - treasury.fillna(0.0)
+    shares_bs = outstanding.where(outstanding > 0).fillna(net_issued.where(net_issued > 0))
+
+    out = pd.DataFrame(index=wide.index.union(n_classes.index))
+    out["shares_bs"] = shares_bs.reindex(out.index)
+    out["shares_bs_direct"] = (outstanding > 0).reindex(out.index, fill_value=False).astype(bool)
+    out["shares_wavg"] = _coalesce(wide, SHARE_WAVG_TAGS).reindex(out.index)
+    out["shares_multi_class"] = n_classes.reindex(out.index).fillna(0).ge(2)
+    return out.rename_axis("adsh").reset_index()
+
+
+def _read_quarter_shares(qdir: Path) -> pd.DataFrame | None:
+    num = qdir / "num.txt.parquet"
+    if not num.exists():
+        LOGGER.warning("rawtags: %s has no num.txt.parquet; skipping", qdir.name)
+        return None
+
+    import pyarrow.parquet as pq
+
+    if pq.ParquetFile(num).metadata.num_rows == 0:
+        return None
+
+    df = pd.read_parquet(
+        num,
+        columns=["adsh", "tag", "ddate", "qtrs", "uom", "segments", "coreg", "value"],
+        filters=[("tag", "in", SHARE_INSTANT_TAGS + SHARE_WAVG_TAGS), ("uom", "==", "shares")],
+    )
+    df = df[df["coreg"].isna()]
+    instant = df["tag"].isin(SHARE_INSTANT_TAGS) & (df["qtrs"] == 0)
+    duration = df["tag"].isin(SHARE_WAVG_TAGS) & (df["qtrs"] == 4)
+    df = df[instant | duration]
+    if df.empty:
+        return None
+    # each tag at its latest date: the balance-sheet date, or the year just ended —
+    # the equity statement also carries opening balances, the income statement prior years
+    df = df[df["ddate"] == df.groupby(["adsh", "tag"])["ddate"].transform("max")]
+    return _summarize_shares(df[["adsh", "tag", "segments", "value"]])
+
+
+def build_raw_share_tags(force: bool = False) -> pd.DataFrame:
+    """Per-``adsh`` share counts from raw ``num.txt`` (see :func:`_summarize_shares`)."""
+    out_path = config.get_paths().raw_share_tags_parquet
+    if out_path.exists() and not force:
+        return pd.read_parquet(out_path)
+
+    qdirs = _quarter_dirs()
+    frames = []
+    for i, qdir in enumerate(qdirs, 1):
+        summary = _read_quarter_shares(qdir)
+        if summary is not None:
+            frames.append(summary)
+        if i % 10 == 0 or i == len(qdirs):
+            LOGGER.info("rawtags: scanned %d/%d quarters (shares)", i, len(qdirs))
+
+    if not frames:
+        raise RuntimeError("no usable num.txt.parquet files found")
+
+    # a filing can appear in more than one quarter zip; the later copy wins
+    df = pd.concat(frames, ignore_index=True).drop_duplicates("adsh", keep="last")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_path, index=False)
+    LOGGER.info("rawtags: wrote %d rows -> %s", len(df), out_path)
+    return df
+
+
+# Two share counts agree within this factor: wide enough for a weighted average
+# against a year-end count in a year of heavy buybacks or issuance ...
+SHARE_AGREEMENT = 1.5
+# ... and are a scale error apart beyond this one — a count or an EPS tagged in
+# thousands or millions, which is how the real failures look.
+SHARE_SCALE_ERROR = 10.0
+# Net income / EPS only stands in for a share count when EPS is big enough that
+# its rounding to the cent doesn't matter.
+IMPLIED_MIN_ABS_EPS = 0.10
+
+
+def _fold(a: pd.Series, b: pd.Series) -> pd.Series:
+    """``max(a/b, b/a)`` — how many times apart two positive numbers are; NaN if either isn't."""
+    r = a.where(a > 0) / b.where(b > 0)
+    return np.maximum(r, 1.0 / r)
+
+
+def _power_of_1000_apart(ratio: pd.Series) -> pd.Series:
+    """Whether a positive ratio sits within 25% of 1000, a million, a thousandth, ...
+    — the fingerprint of a value tagged in the wrong unit."""
+    lr = np.log10(ratio.where(ratio > 0))
+    k = np.round(lr / 3)
+    return ((k != 0) & ((lr - 3 * k).abs() <= np.log10(1.25))).fillna(False)
+
+
+def reconcile_shares(df: pd.DataFrame) -> pd.DataFrame:
+    """One share count per filing, cross-checked across three sources, and EPS checked against it.
+
+    * **reported** — the weighted average from the income statement (the
+      standardized value, else the raw tag): the count EPS divides by;
+    * **balance sheet** — shares outstanding at the period end (``shares_bs``);
+    * **implied** — net income / EPS.
+
+    Every source has real errors: counts tagged in thousands or millions
+    (Bruker's weighted average is 146, Waters' balance-sheet count 59,388),
+    placeholder zeros, and EPS off by a factor of a million (Halliburton's
+    2,930,000). So a count is kept when a second source backs it up, and when
+    the reported count is the odd one out and the other two agree, it is
+    replaced. Net income / EPS only ever *confirms*: net income is before
+    preferred dividends, so for a company with large ones it sits far from the
+    count without anything being wrong.
+
+    When the reported and balance-sheet counts are more than a scale error
+    apart with nothing to break the tie, the count is left NaN — a missing
+    market cap drops a company from a screen, a wrong one sorts it to the top.
+    A moderate gap (a weighted average against the year-end count in an IPO
+    year) keeps the reported count.
+
+    Without a reported count: the balance-sheet count, confirmed by net income
+    / EPS where possible; net income / EPS instead when the balance-sheet count
+    was worked out from an issued count (treasury may be untagged) or the filing
+    lists several share classes (a single total can add classes of different
+    economic weight; net income / EPS counts in units of the share EPS is quoted for).
+
+    Finally EPS × shares is checked against net income. A gap of a clean power
+    of 1000 is a unit error — Halliburton's EPS, AMTX's share counts (both of
+    them, so they "agree"), or a net income tagged in thousands — and nothing in
+    the filing says which of the three it is. So the share count and EPS are
+    both left NaN rather than one of them "corrected" into a new wrong number.
+
+    Adds ``shares_source`` (``reported``, ``balance_sheet``, ``implied``,
+    ``conflict`` or ``missing``) and ``eps_source`` (``reported``, ``conflict``
+    or ``missing``); the inputs survive as ``shares_reported`` and ``eps_reported``.
+    """
+    out = df.copy()
+    nan = pd.Series(np.nan, index=out.index, dtype="float64")
+
+    def col(name: str) -> pd.Series:
+        return out[name].astype("float64") if name in out.columns else nan
+
+    reported = col("shares_outstanding")
+    w = reported.where(reported > 0).fillna(col("shares_wavg").where(col("shares_wavg") > 0))
+    b = col("shares_bs").where(col("shares_bs") > 0)
+    direct = (
+        out["shares_bs_direct"].fillna(False).astype(bool)
+        if "shares_bs_direct" in out.columns
+        else pd.Series(True, index=out.index)
+    )
+    multi = (
+        out["shares_multi_class"].fillna(False).astype(bool)
+        if "shares_multi_class" in out.columns
+        else pd.Series(False, index=out.index)
+    )
+    eps, ni = col("eps"), col("net_income")
+    implied = (ni / eps).where(eps.abs() >= IMPLIED_MIN_ABS_EPS)
+    i = implied.where(implied > 0)
+
+    def agree(x, y):
+        return (_fold(x, y) <= SHARE_AGREEMENT).fillna(False)
+
+    def apart(x, y):
+        return (_fold(x, y) > SHARE_SCALE_ERROR).fillna(False)
+
+    b_or_i = b.where(direct, i)  # when the two agree: the tagged count, else net income / EPS
+    has_w = w.notna()
+    rules = [
+        # (condition, value, source) — the first match wins
+        (has_w & (agree(w, b) | agree(w, i)), w, "reported"),
+        (has_w & agree(b, i), b_or_i, "balance_sheet"),  # the reported count is the odd one out
+        (has_w & apart(w, b), nan, "conflict"),
+        (has_w, w, "reported"),  # a moderate gap: keep the count EPS divides by
+        (agree(b, i), b_or_i, "balance_sheet"),
+        (i.notna() & (multi | (b.notna() & ~direct)), i, "implied"),
+        (b.notna(), b, "balance_sheet"),
+        (i.notna(), i, "implied"),
+    ]
+    conds = [c.to_numpy() for c, _, _ in rules]
+    shares = pd.Series(np.select(conds, [v.to_numpy() for _, v, _ in rules], default=np.nan), index=out.index)
+    source = pd.Series(np.select(conds, [s for _, _, s in rules], default="missing"), index=out.index)
+    # the "balance_sheet" rows that took net income / EPS say so
+    source = source.mask((source == "balance_sheet") & shares.ne(b) & shares.eq(i), "implied")
+
+    unit_error = _power_of_1000_apart(eps * shares / ni.where(ni != 0))
+
+    out["shares_reported"] = reported
+    out["shares_outstanding"] = shares.mask(unit_error)
+    out["shares_source"] = source.mask(unit_error, "conflict")
+    if "eps" in out.columns:
+        out["eps_reported"] = eps
+        out["eps"] = eps.mask(unit_error)
+        eps_source = pd.Series(np.where(eps.notna(), "reported", "missing"), index=out.index)
+        out["eps_source"] = eps_source.mask(unit_error, "conflict")
+    return out

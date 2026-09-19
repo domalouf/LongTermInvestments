@@ -135,6 +135,22 @@ try:
         "A field at less than 100% shrinks the universe for any screen that ranks on it — "
         "<code>ranking.rank()</code> drops rows with a missing value."
     )
+    if "shares_source" in tickered.columns:
+        src = tickered["shares_source"].value_counts(normalize=True)
+        parts = [
+            ("reported", "as reported"),
+            ("balance_sheet", "from the balance sheet"),
+            ("implied", "net income ÷ EPS"),
+            ("conflict", "refused — sources a unit error apart"),
+            ("missing", "missing"),
+        ]
+        theme.note(
+            "Where the share counts come from: "
+            + " · ".join(f"<b>{src.get(k, 0.0):.1%}</b> {label}" for k, label in parts)
+            + ". Many filers footnote their weighted-average shares, which the SEC data sets "
+            "don't carry, so the balance sheet fills in — every count cross-checked "
+            "(<code>rawtags.reconcile_shares</code>)."
+        )
 except FileNotFoundError:
     _universe = set()
     st.info("No fundamentals table yet. Run `lti build-fundamentals` (add `--smoke` for a quick subset).")

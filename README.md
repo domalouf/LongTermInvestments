@@ -98,11 +98,35 @@ any company that split *later* looks cheaper by the split ratio — AAPL screene
 of 0.37 in January 2013 (really ~12), NVDA at 0.31, BKNG at 1.2. Companies split after
 their stock has risen, so this is look-ahead bias that hands a cheapness screen the
 future winners. On January rebalances, fixing it took the P/E + debt/equity top-10
-backtest (2011–) from 16.8% to 6.3% a year, and the Magic Formula top-30 (2013–) from
-14.7% to 10.6% — against 13.9% and 14.6% for SPY. The factor analysis deflated the same
-way: ROIC's IC t-stat fell from 7.0 to 2.2, and P/B's from −4.9 to 0.1. Valuing on the
+backtest (2011–) from 16.0% to 6.9% a year, and the Magic Formula top-30 (2013–) from
+12.7% to 9.4% — against 13.9% and 14.6% for SPY. The factor analysis deflated the same
+way: ROIC's IC t-stat fell from 7.6 to 2.1, and P/B's from −4.2 to 0.0. Valuing on the
 dividend-adjusted price would flatter past dividend payers too, which is why valuation
 uses `close.parquet`.
+
+### Share counts
+
+A market cap needs a share count, and the standardized income statement only has one
+when the filer shows its weighted-average shares on the face of the statement. The SEC
+data sets carry nothing from the footnotes, and Alphabet, Procter & Gamble, Chevron,
+Merck, Boeing and many more put it in the EPS footnote — which left 28% of companies with
+$10B+ of revenue without a market cap, invisible to every priced screen. `lti.rawtags`
+now also reads the balance-sheet count (tagged outstanding, else issued less treasury),
+and `reconcile_shares` picks one count per filing from three sources: the reported
+weighted average, the balance sheet, and net income ÷ EPS. That cuts the gap to 1.4%
+(2.4% of companies with $1B+ of revenue); what's left is mostly filers with no ordinary
+common equity (TVA, preferred-only listings) and Berkshire, whose EPS is per class.
+
+Every source has errors — counts tagged in thousands or millions (Bruker's weighted
+average is 146), placeholder zeros, EPS off by a million (Halliburton's 2,930,000) —
+so a count is kept when a second source backs it up, a reported count that's the odd
+one out is replaced, and where two counts sit a scale error apart with nothing to break
+the tie, or EPS × shares is a power of 1000 away from net income, the values are left
+NaN: a missing market cap drops a company from a screen, a wrong one sorts it to the
+top. `shares_source` and `eps_source` record which rule applied; the standardized
+values survive as `shares_reported` and `eps_reported`. Net income ÷ EPS only ever
+confirms (net income is before preferred dividends), except for multi-class filers,
+where it's the count in units of the share EPS is quoted for.
 
 `lti fetch-prices` downloads full history for any ticker without a split-adjusted
 series — so a cache from before `close.parquet` existed re-fetches every ticker once.
@@ -181,7 +205,7 @@ lti backtest --magic-formula --top-n 30 --start 2013-01-01
 
 Both inputs come from fields the `secfsdstools` standardizers don't emit or don't get
 right, so `lti.rawtags` reads them from the raw SEC files: SIC from `sub.txt`, and net
-PP&E, interest-bearing debt and as-reported operating income from `num.txt`.
+PP&E, interest-bearing debt, as-reported operating income and share counts from `num.txt`.
 
 - **Debt** tagging is inconsistent across filers, so `total_debt` carries a `debt_source`
   column — `reported` (a debt tag was present), `assumed_zero` (no debt tag and negligible

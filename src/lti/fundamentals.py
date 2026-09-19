@@ -249,6 +249,12 @@ def build_fundamentals(smoke: bool = False, quarters: list[str] | None = None) -
     # EBIT as the filer tagged it, rather than as the standardizer derived it
     merged = merged.merge(rawtags.build_raw_is_tags(), on="adsh", how="left")
 
+    # share counts: many filers footnote the weighted average, which the data
+    # sets don't carry, so fill from the balance sheet and cross-check every
+    # source — before the prior-year lag, so eps_prev inherits the checks
+    merged = merged.merge(rawtags.build_raw_share_tags(), on="adsh", how="left")
+    merged = rawtags.reconcile_shares(merged)
+
     # convenience columns
     if "capex" in merged.columns and "cfo" in merged.columns:
         merged["free_cash_flow"] = merged["cfo"] - merged["capex"].abs()

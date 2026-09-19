@@ -67,6 +67,7 @@ class Paths:
     sic_parquet: Path
     raw_bs_tags_parquet: Path
     raw_is_tags_parquet: Path
+    raw_share_tags_parquet: Path
 
     # price cache
     prices_dir: Path
@@ -127,6 +128,7 @@ def get_paths() -> Paths:
         sic_parquet=derived / "sic_by_adsh.parquet",
         raw_bs_tags_parquet=derived / "raw_bs_tags.parquet",
         raw_is_tags_parquet=derived / "raw_is_tags.parquet",
+        raw_share_tags_parquet=derived / "raw_share_tags.parquet",
         prices_dir=prices,
         adj_close_parquet=prices / "adj_close.parquet",
         close_parquet=prices / "close.parquet",
