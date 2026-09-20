@@ -53,9 +53,23 @@ annual = stock_mod.annual_fundamentals(fund, cik)
 name = stock_mod.company_name(fund, cik) or symbol
 psym = stock_mod.price_symbol(fund, cik, panel, sym)
 splits = stock_mod.splits_for(px.splits, psym) if (adjust_splits and psym) else pd.Series(dtype="float64")
+paid = stock_mod.dividends_for(px.dividends, psym) if psym else pd.Series(dtype="float64")
 # valuation runs on the split-adjusted close: the adjusted one sits below the traded
 # price by every dividend since, which would drag the early multiples down
 has_close = bool(psym) and psym in px.close.columns
+
+# The last twelve months of dividends, and the same window five years back — read
+# off the latest close, so the tab below and the fair-value models agree.
+last_close = px.close[psym].dropna() if has_close else pd.Series(dtype="float64")
+div_asof = last_close.index.max() if len(last_close) else (paid.index.max() if not paid.empty else None)
+ttm_dps = dps_5y_ago = 0.0
+if div_asof is not None and not paid.empty:
+    ttm_dps = float(paid[paid.index > div_asof - pd.DateOffset(months=12)].sum())
+    dps_5y_ago = float(
+        paid[(paid.index > div_asof - pd.DateOffset(months=72))
+             & (paid.index <= div_asof - pd.DateOffset(months=60))].sum()
+    )
+div_growth_5y = (ttm_dps / dps_5y_ago) ** 0.2 - 1 if ttm_dps > 0 and dps_5y_ago > 0 else None
 
 st.subheader(f"{symbol} — {name}")
 c1, c2, c3, c4 = st.columns(4)
@@ -74,9 +88,9 @@ if annual.empty and not psym:
     st.warning(f"No fundamentals and no price history for {symbol}.")
     st.stop()
 
-price_tab, income_tab, margin_tab, bs_tab, cf_tab, val_tab, fv_tab, raw_tab = st.tabs(
+price_tab, income_tab, margin_tab, bs_tab, cf_tab, div_tab, val_tab, fv_tab, raw_tab = st.tabs(
     ["Price", "Income", "Margins & returns", "Balance sheet", "Cash flow",
-     "Valuation", "Fair value", "Raw data"]
+     "Dividends", "Valuation", "Fair value", "Raw data"]
 )
 
 with price_tab:
@@ -209,6 +223,45 @@ with cf_tab:
             "(as reported) · <code>free_cash_flow</code> = cfo − |capex|."
         )
 
+with div_tab:
+    if not psym:
+        st.info("No price history cached for this ticker, so no dividend history either.")
+    elif paid.empty:
+        since = last_close.index.min().date() if len(last_close) else "the cache begins"
+        st.info(
+            f"{symbol} has paid no dividend since {since}. Everything it earns it keeps, "
+            "reinvests or spends on buybacks."
+        )
+    else:
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Paid last 12 months", f"${ttm_dps:,.2f}", help="Per share, on today's share count.")
+        if len(last_close):
+            d2.metric("Yield", f"{ttm_dps / float(last_close.iloc[-1]):.2%}",
+                      help="Last twelve months' dividends over the latest split-adjusted close.")
+        if div_growth_5y is not None:
+            d3.metric("5-year growth", f"{div_growth_5y:+.1%}",
+                      help="CAGR of the trailing-twelve-month payment.")
+        d4.metric("Payments on record", f"{len(paid):,}", help=f"Since {paid.index.min().date()}.")
+
+        st.subheader("Dividends per share, by calendar year")
+        by_year = stock_mod.dividends_by_year(paid)
+        fig = go.Figure(
+            go.Bar(
+                x=by_year["year"], y=by_year["dividends"],
+                hovertemplate="%{x}: $%{y:,.2f} per share<extra></extra>",
+            )
+        )
+        theme.bar_marks(fig, theme.BLUE)
+        theme.show(fig, height=330, legend=False,
+                   yaxis=dict(tickprefix="$", title="per share", rangemode="tozero"),
+                   xaxis=dict(title="", dtick=1))
+        theme.note(
+            "What a holder actually received, restated onto today's share count — so a payment "
+            "from before a 4:1 split shows as a quarter of the cheque that arrived. The current "
+            "year is part-way through. The price chart already contains all of this: the adjusted "
+            "close is what these dividends compound to if they were reinvested."
+        )
+
 with val_tab:
     val = stock_mod.valuation_history(annual, px.close, psym, splits=splits) if has_close else pd.DataFrame()
     if val.empty:
@@ -279,6 +332,13 @@ with fv_tab:
             latest[c] = norm[c].iloc[0] if len(norm) else np.nan
         shares_now = latest["shares_outstanding"] if "shares_outstanding" in latest.columns else np.nan
         latest["fcf_ps_norm"] = latest["fcf_norm"] / shares_now
+
+        # the models prefer real payments to the cash-flow tag; hand them the
+        # same trailing-twelve-month figure a snapshot would carry
+        if not paid.empty:
+            latest["dps_ttm"] = ttm_dps
+            if div_growth_5y is not None:
+                latest["dividend_growth_5y"] = div_growth_5y
 
         cagr_eps = historical_cagr(annual, "eps", 5)
         cagr_rev = historical_cagr(annual, "revenues", 5)

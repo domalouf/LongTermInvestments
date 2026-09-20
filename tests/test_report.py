@@ -25,6 +25,7 @@ def ranked() -> pd.DataFrame:
             "fair_value_est": [25.0, 22.0],
             "fair_value_est_upside": [1.5, 0.1],
             "pe_norm": [8.0, np.nan],
+            "dividend_yield": [0.042, 0.0],
             "profit_years": [5.0, 4.0],
             "revenue_cagr": [0.06, -0.02],
             "fcf_conversion": [0.9, np.nan],
@@ -44,6 +45,13 @@ def test_build_view_drops_missing_and_resets_index(ranked):
     assert "fcf_conversion" not in view.columns
     assert list(view.columns) == [c for c in report.VIEW_COLUMNS if c != "fcf_conversion"]
     assert list(view.index) == [0, 1]
+
+
+def test_dividend_yield_renders_as_a_percent_and_a_non_payer_as_a_dash(ranked):
+    html = report.render_html(ranked, asof="2026-09-05", params={})
+    assert "<th>Dividend yield</th>" in html
+    assert '<td class="num">4.2%</td>' in html
+    assert '<td class="num">0.0%</td>' not in html  # BBB pays nothing, so it gets a dash
 
 
 def test_build_payload_shape_and_null_coercion(ranked):

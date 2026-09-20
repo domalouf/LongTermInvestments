@@ -186,6 +186,9 @@ def priced_snapshot(
     would flatter past dividend payers. A company with no recent close keeps a
     NaN price (and so a NaN market cap and P/E).
 
+    Dividends known at ``asof`` come with it: ``dps_ttm`` (the last year's
+    payments), ``dividend_yield``, ``dividend_growth_5y`` and ``payout_ratio``.
+
     ``with_history`` adds what takes several years of filings: the normalized
     and consistency metrics (:data:`lti.metrics.HISTORY_METRICS`, via
     :mod:`lti.history`) and the fair-value upsides built on them
@@ -206,6 +209,16 @@ def priced_snapshot(
     then = prices_mod.prices_asof(px.adj, snap["ticker"], asof - pd.DateOffset(months=12))
     recent = prices_mod.prices_asof(px.adj, snap["ticker"], asof - pd.DateOffset(months=1))
     snap["momentum_12_1"] = recent / then.where(then > 0) - 1.0
+    # What the company actually paid per share over the last year, from the
+    # dividend events rather than the cash-flow statement: the SEC tag covers a
+    # quarter of filers, lags by up to a year, and lumps preferred in with
+    # common. Both sides of the yield are on today's share basis.
+    dps = prices_mod.trailing_dividends(px.dividends, snap["ticker"], asof)
+    snap["dps_ttm"] = dps.where(price.notna())  # unpriced means unfetched, not unpaid
+    snap["dividend_yield"] = metrics._safe_div(snap["dps_ttm"], price)
+    snap["dividend_growth_5y"] = prices_mod.dividend_growth(px.dividends, snap["ticker"], asof)
+    eps = snap["eps"] if "eps" in snap.columns else pd.Series(np.nan, index=snap.index)
+    snap["payout_ratio"] = metrics._safe_div(snap["dps_ttm"], eps.where(eps > 0))
     if with_history:
         from lti import history, valuation  # both build on this module
 

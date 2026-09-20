@@ -97,6 +97,30 @@ def splits_for(splits: pd.DataFrame, symbol: str) -> pd.Series:
     return pd.Series(sub["ratio"].to_numpy(dtype="float64"), index=pd.to_datetime(sub["date"])).sort_index()
 
 
+def dividends_for(dividends: pd.DataFrame, symbol: str) -> pd.Series:
+    """One ticker's ``{ex-date: amount}`` dividend history from the cached table.
+
+    Already on today's share basis, like the split-adjusted close — no restating
+    of its own, so a per-share amount here divides straight into a price there.
+    """
+    if dividends is None or dividends.empty:
+        return pd.Series(dtype="float64")
+    sub = dividends[dividends["ticker"].astype(str).str.upper() == symbol.upper().strip()]
+    return pd.Series(sub["amount"].to_numpy(dtype="float64"), index=pd.to_datetime(sub["date"])).sort_index()
+
+
+def dividends_by_year(paid: pd.Series) -> pd.DataFrame:
+    """A ``{ex-date: amount}`` series as ``year, dividends`` rows, newest last.
+
+    Calendar years, not fiscal ones: this is the cash a holder received, and a
+    part-year at either end is real rather than a gap to fill.
+    """
+    if paid is None or paid.empty:
+        return pd.DataFrame(columns=["year", "dividends"])
+    by = paid.groupby(paid.index.year).sum()
+    return pd.DataFrame({"year": by.index.astype(int), "dividends": by.to_numpy(dtype="float64")})
+
+
 def _split_divisor(filed_dates: pd.Series, splits: pd.Series | None) -> np.ndarray:
     """Per-filing factor that restates as-reported per-share figures onto today's
     share basis: the product of every split ratio that took effect *after* the

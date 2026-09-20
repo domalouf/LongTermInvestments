@@ -38,8 +38,17 @@ PRICE_METRICS = [
     "book_to_market",
     "shareholder_yield",
     "altman_z",
-    "momentum_12_1",  # needs the price history, so lti.pit adds it
+    # these three need more than the latest close, so lti.pit adds them
+    "momentum_12_1",
+    "dividend_yield",     # the last year's dividends / price
+    "dividend_growth_5y",  # CAGR of that trailing dividend over five years
 ]
+
+# Computed alongside the price metrics but not offered as a ranking: a company
+# is not "better" for paying out more of its earnings or less of them.
+#   dps_ttm       dividends per share over the last twelve months
+#   payout_ratio  that, over EPS — how much of the earnings it hands back
+DIVIDEND_COLUMNS = ["dps_ttm", "payout_ratio"]
 
 # From several years of filings rather than the latest one (lti.history): the
 # normalized versions of the valuation ratios, and how consistent the business is.

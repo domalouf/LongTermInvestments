@@ -161,8 +161,8 @@ k[3].metric(
 st.header("The list")
 
 base = ["rank", "ticker", "company", "sector", "price", "fair_value_est", "upside_pct"]
-evidence = ["pe", "pe_norm", "profit_years", "eps_vs_norm", "revenue_cagr", "fcf_conversion",
-            "debt_to_equity", "market_cap"]
+evidence = ["pe", "pe_norm", "dividend_yield", "profit_years", "eps_vs_norm", "revenue_cagr",
+            "fcf_conversion", "debt_to_equity", "market_cap"]
 
 table = ranked.copy()
 # ProgressColumn formats the raw number, so hand it whole percentage points
@@ -195,6 +195,11 @@ st.dataframe(
         "pe_norm": st.column_config.NumberColumn(
             "P/E (norm.)", format="%.1f",
             help=f"On normalized EPS — the median of the last {HISTORY_YEARS} years.",
+        ),
+        "dividend_yield": st.column_config.NumberColumn(
+            "Dividend yield", format="percent",
+            help="The last twelve months' payments over today's price. A blank column means the "
+                 "name pays nothing — cheap and paying is a different proposition from cheap alone.",
         ),
         "profit_years": st.column_config.NumberColumn(
             "Profitable yrs", format="%d",

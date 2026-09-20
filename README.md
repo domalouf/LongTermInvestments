@@ -90,9 +90,9 @@ streamlit run src/lti/app/Home.py
 filter / standardize / concat, fundamentals, ticker map, prices) — handy for checking
 on the multi-hour full build. `lti fetch-prices` shows a live `tqdm` bar while running.
 
-### Prices, splits and look-ahead
+### Prices, splits, dividends and look-ahead
 
-`data/prices/` holds three things, and each has one job:
+`data/prices/` holds four things, and each has one job:
 
 - `adj_close.parquet` — close adjusted for splits **and dividends**: a total-return
   series. Used for **returns** only.
@@ -100,6 +100,8 @@ on the multi-hour full build. `lti fetch-prices` shows a live `tqdm` bar while r
   share basis. Used for **valuation** (P/E, P/B, market cap, EV, fair value).
 - `splits.parquet` — every split (`ticker, date, ratio`), used to restate each 10-K's
   EPS and share count onto that same basis (`lti.pit.restate_per_share`).
+- `dividends.parquet` — every dividend (`ticker, date, amount`), the cash paid per
+  share. Used for the **yield**, the payout ratio and the dividend-discount model.
 
 That split matters. A 10-K reports per-share figures on the share count of the day it
 was filed, while Yahoo back-adjusts prices for every split since. Pair the two as-is and
@@ -138,11 +140,52 @@ confirms (net income is before preferred dividends), except for multi-class file
 where it's the count in units of the share EPS is quoted for.
 
 `lti fetch-prices` downloads full history for any ticker without a split-adjusted
-series — so a cache from before `close.parquet` existed re-fetches every ticker once.
-`lti refresh-prices` downloads a short recent window and compares the bars it shares
-with the cache: Yahoo rewrites a ticker's whole history on a split (and the adjusted
-close on every dividend), and splicing the new window onto the old history would put a
-fake crash at the seam, so any ticker whose overlap doesn't match is re-fetched in full.
+series or a recorded dividend count — so a cache from before `close.parquet` or
+`dividends.parquet` existed re-fetches every ticker once (about 15 minutes for ~4,200
+tickers at `--batch-size 80`). `lti refresh-prices` downloads a short recent window and
+compares the bars it shares with the cache: Yahoo rewrites a ticker's whole history on a
+split (and the adjusted close on every dividend), and splicing the new window onto the
+old history would put a fake crash at the seam, so any ticker whose overlap doesn't
+match is re-fetched in full. A split or dividend inside the window forces that re-fetch
+outright — a dividend re-bases the bars *before* its ex-date, so one landing on the
+window's first bar leaves the overlap looking untouched while its event goes unrecorded.
+
+### Dividends
+
+The dividend events come from the same download as the prices, and Yahoo states the
+amounts on today's share basis, exactly like `close.parquet` — a payment from before a
+4:1 split comes back quartered. So a yield is one divided by the other, with nothing to
+restate in between.
+
+Every priced snapshot carries four columns off that table, all point-in-time (only
+ex-dates on or before the as-of date count, so a backtest can't see a dividend declared
+after its rebalance):
+
+| column | what it is |
+| --- | --- |
+| `dps_ttm` | dividends per share over the last twelve months |
+| `dividend_yield` | that, over the split-adjusted close — rankable |
+| `dividend_growth_5y` | CAGR of the trailing-twelve-month payment over five years — rankable |
+| `payout_ratio` | `dps_ttm` over EPS |
+
+A company with no payments yields **0**, not NaN: the cache holds every fetched
+ticker's whole history, so silence there means it paid nothing, and a screen should be
+able to rank on that. `dividend_growth_5y` is the exception — it stays NaN unless the
+company paid in both windows, since a starter has no rate yet and a cutter's isn't
+finite.
+
+This replaces the only dividend figure the project had before: `PaymentsOfDividends`
+from the standardized cash-flow statement, which carries just **25%** of the latest
+filings, lags by up to a year, and lumps preferred dividends in with common. The
+valuation models (`ddm_value`, and the dividend yield in Peter Lynch's fair P/E) use the
+payments when a frame has them and fall back to the tag when it doesn't. Gordon growth
+also grows the dividend at its *own* rate where one is known rather than at the
+revenue-side estimate — a company can grow revenue and hold its payout flat — though
+both are capped at the terminal rate inside the model.
+
+Note that this changes no return anywhere: `adj_close.parquet` has always been a
+total-return series, so the backtests, the factor study and the forward track record
+already counted every dividend. What is new is being able to *see* and *rank on* them.
 
 ## GUI
 
@@ -182,7 +225,8 @@ Sidebar: **As of** (point-in-time date — only filings filed on/before it are u
 **Min market cap ($M)**, **Greenblatt Magic Formula** (a one-click preset, below),
 **Rank by** (one or more of `pe`, `pb`, `peg`, `earnings_yield`, `ebit_ev`,
 `debt_to_equity`, `current_ratio`, `roe`, `roic`, `net_margin`, `gross_margin`,
-`fcf_margin`, `revenue_growth_1y`, `eps_growth_1y`), **Top N**,
+`fcf_margin`, `revenue_growth_1y`, `eps_growth_1y`, `dividend_yield`,
+`dividend_growth_5y`, … — the menu is the four lists in `lti.metrics`), **Top N**,
 **Require positive EPS**, and the **Exclusions** (operating companies only — no
 commodity/crypto trusts or revenue-less shells — financials, utilities).
 Body: ranked table (raw metric values + a `<metric>_pctile` per input when ranking by
@@ -416,8 +460,9 @@ look is a `review` entry pointing at the original, and the page flags reviews th
 share for each of: **two-stage DCF** (FCF/share grown at the estimated rate for N years
 then a Gordon terminal value, discounted at the required return), **Peter Lynch** (fair
 P/E = earnings-growth % + dividend yield %), **Graham number** (√(22.5·EPS·BVPS)),
-**Graham revised** (EPS·(8.5+2g)·4.4/Y), **DDM** (Gordon growth on dividends, perpetual
-growth capped at the terminal rate) and **EPV** (no-growth capitalised earnings, EPS/r).
+**Graham revised** (EPS·(8.5+2g)·4.4/Y), **DDM** (Gordon growth on the last twelve
+months' dividends, grown at their own five-year rate where there is one, perpetual growth
+capped at the terminal rate) and **EPV** (no-growth capitalised earnings, EPS/r).
 `fair_value_est` is the median of the models that produced a number; `*_upside` is
 `fair value ÷ price − 1`. `basis="normalized"` (the default) feeds them normalized EPS,
 normalized FCF per share and the five-year revenue CAGR from `lti.history`;
