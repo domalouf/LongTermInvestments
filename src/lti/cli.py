@@ -380,6 +380,8 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
             return
         view = report.build_view(ranked)
         view["fair_value_est_upside"] = (view["fair_value_est_upside"] * 100).round(1)
+        if "dividend_yield" in view.columns:
+            view["dividend_yield"] = (view["dividend_yield"] * 100).round(1)
         for c in ("price", "fair_value_est", "pe_norm", "revenue_cagr", "fcf_conversion", "debt_to_equity"):
             if c in view.columns:
                 view[c] = view[c].round(2)
@@ -431,7 +433,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fp = sub.add_parser(
         "fetch-prices",
-        help="download/cache yfinance prices (total-return + split-adjusted) and split history",
+        help="download/cache yfinance prices (total-return + split-adjusted), splits and dividends",
     )
     fp.add_argument("--smoke", action="store_true")
     fp.add_argument("--universe-file", help="file with one ticker per line")

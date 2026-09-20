@@ -18,6 +18,10 @@ The models run on one of two earnings bases:
     the latest 10-K alone, growth from its one-year change — what this
     module did before, kept for comparison.
 
+Dividends are the exception to "from the filings": the models take the
+trailing twelve months of actual payments when the frame carries them, since
+the cash-flow tag that would otherwise supply them is sparse and stale.
+
 Growth is clipped to ``[0, growth_cap]`` either way; pass an explicit
 ``growth`` Series (e.g. :func:`historical_cagr`) to override it.
 """
@@ -200,11 +204,17 @@ def add_valuation_models(
             if "free_cash_flow" in df.columns and shares is not None
             else None
         )
-    dps = (
-        _safe_div(df["dividends_paid"].abs(), shares)
-        if "dividends_paid" in df.columns and shares is not None
-        else None
-    )
+    # Dividends per share: the last twelve months of actual payments when the
+    # frame carries them (``dps_ttm``, from :func:`lti.pit.priced_snapshot`),
+    # else the cash-flow statement's total over the share count — a tag only a
+    # quarter of filers report, up to a year stale, preferred lumped in with
+    # common.
+    if "dps_ttm" in df.columns:
+        dps = df["dps_ttm"].astype("float64")
+    elif "dividends_paid" in df.columns and shares is not None:
+        dps = _safe_div(df["dividends_paid"].abs(), shares)
+    else:
+        dps = None
 
     if growth is None:
         growth = _estimate_growth(df, a, basis)
@@ -222,7 +232,14 @@ def add_valuation_models(
     if fcf_ps is not None:
         df["dcf_value"] = two_stage_dcf(fcf_ps, growth, a)
     if dps is not None:
-        df["ddm_value"] = ddm_value(dps, growth, a)
+        # Gordon growth grows the *dividend*, so use the dividend's own rate
+        # where one is known — a company can grow revenue and hold its payout
+        # flat. The earnings-side estimate stands in otherwise, and the model
+        # caps either at the terminal rate.
+        d_growth = growth
+        if "dividend_growth_5y" in df.columns:
+            d_growth = df["dividend_growth_5y"].reindex(df.index).fillna(growth)
+        df["ddm_value"] = ddm_value(dps, d_growth, a)
 
     present = [m for m in MODELS if m in df.columns]
     df["fair_value_est"] = df[present].replace([np.inf, -np.inf], np.nan).median(axis=1)

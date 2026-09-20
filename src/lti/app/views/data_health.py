@@ -29,6 +29,7 @@ ARTIFACTS = [
     ("Price cache (total return)", paths.adj_close_parquet, "lti fetch-prices"),
     ("Price cache (split-adjusted)", paths.close_parquet, "lti fetch-prices"),
     ("Split history", paths.splits_parquet, "lti fetch-prices"),
+    ("Dividend history", paths.dividends_parquet, "lti fetch-prices"),
 ]
 
 present = [(n, p, c) for n, p, c in ARTIFACTS if p.exists()]
@@ -161,7 +162,7 @@ st.header("Price cache")
 if _panel.empty:
     st.info("No prices cached yet. Run `lti fetch-prices`.")
 else:
-    p = st.columns(5)
+    p = st.columns(6)
     p[0].metric("Tickers", f"{_panel.shape[1]:,}")
     p[1].metric("From", str(_panel.index.min().date()))
     p[2].metric("To", str(_panel.index.max().date()))
@@ -170,6 +171,8 @@ else:
                 help="Tickers with a split-adjusted close — the price every valuation uses.")
     p[4].metric("Splits on record", f"{len(_px.splits):,}" if _px is not None else "—",
                 help="Used to restate each 10-K's EPS and share count onto today's share basis.")
+    p[5].metric("Dividends on record", f"{len(_px.dividends):,}" if _px is not None else "—",
+                help="Cash paid per share, ex-date by ex-date — what the yield and the DDM run on.")
 
     # only companies fetch-prices would fill: warrants, preferreds and tickers
     # without a share count sit in the cache too, but no screen can price them,

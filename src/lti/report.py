@@ -29,6 +29,7 @@ VIEW_COLUMNS: list[str] = [
     "fair_value_est",
     "fair_value_est_upside",
     "pe_norm",
+    "dividend_yield",
     "profit_years",
     "revenue_cagr",
     "fcf_conversion",
@@ -43,6 +44,7 @@ _COLUMN_LABELS: dict[str, str] = {
     "fair_value_est": "Fair value",
     "fair_value_est_upside": "Upside",
     "pe_norm": "P/E (5y)",
+    "dividend_yield": "Dividend yield",
     "profit_years": "Profitable yrs",
     "revenue_cagr": "Revenue growth",
     "fcf_conversion": "Cash conversion",
@@ -56,6 +58,7 @@ _NUMERIC_COLUMNS = {
     "fair_value_est",
     "fair_value_est_upside",
     "pe_norm",
+    "dividend_yield",
     "profit_years",
     "revenue_cagr",
     "fcf_conversion",
@@ -119,6 +122,8 @@ def _fmt_cell(col: str, val) -> str:
         return f"{val:+.0%}"
     if col in ("roe", "fcf_conversion"):
         return f"{val:.0%}"
+    if col == "dividend_yield":
+        return f"{val:.1%}" if val else "&mdash;"  # a non-payer yields 0, which is a dash here
     if col in ("pe", "pe_norm", "debt_to_equity"):
         return f"{val:.1f}"
     return html.escape(str(val))

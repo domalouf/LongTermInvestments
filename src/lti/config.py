@@ -74,6 +74,7 @@ class Paths:
     adj_close_parquet: Path
     close_parquet: Path
     splits_parquet: Path
+    dividends_parquet: Path
     prices_meta_parquet: Path
 
     # forward track record + decision journal (append-only)
@@ -140,6 +141,7 @@ def get_paths() -> Paths:
         adj_close_parquet=prices / "adj_close.parquet",
         close_parquet=prices / "close.parquet",
         splits_parquet=prices / "splits.parquet",
+        dividends_parquet=prices / "dividends.parquet",
         prices_meta_parquet=prices / "_prices_meta.parquet",
         track_dir=track,
         track_records_dir=track / "records",

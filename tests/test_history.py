@@ -16,7 +16,13 @@ from lti.backtest import BacktestConfig, run_backtest
 from lti.fundamentals import _add_prior_year
 from lti.prices import PriceData, empty_splits
 from lti.ranking import ScreenSpec
-from lti.valuation import MAX_UPSIDE, add_fair_value_metrics, add_valuation_models, rank_undervalued
+from lti.valuation import (
+    MAX_UPSIDE,
+    ValuationAssumptions,
+    add_fair_value_metrics,
+    add_valuation_models,
+    rank_undervalued,
+)
 
 YEARS = range(2014, 2025)
 ASOF = "2025-06-02"
@@ -118,6 +124,59 @@ def test_a_peak_year_no_longer_inflates_fair_value(world):
     norm = add_valuation_models(snap, snap["price"], basis="normalized").loc["PEAK", "fair_value_est"]
     latest = add_valuation_models(snap, snap["price"], basis="latest").loc["PEAK", "fair_value_est"]
     assert latest > 3 * norm
+
+
+# --- dividends -------------------------------------------------------------------
+
+
+@pytest.fixture
+def payer(world):
+    """STDY pays 25c a quarter, half that five years ago; nobody else pays.
+
+    Every company in the fixture reports ``dividends_paid = -40`` on 100 shares,
+    so the cash-flow tag would put all four on 40c a share — the payer included.
+    """
+    fund, px = world
+    rows = [("STDY", f"{y}-{m:02d}-01", 0.25) for y, m in [(2024, 9), (2024, 12), (2025, 3), (2025, 6)]]
+    rows += [("STDY", f"{y}-{m:02d}-01", 0.125) for y, m in [(2019, 9), (2019, 12), (2020, 3), (2020, 6)]]
+    paid = pd.DataFrame(rows, columns=["ticker", "date", "amount"]).astype({"ticker": "string"})
+    paid["date"] = pd.to_datetime(paid["date"])
+    return fund, PriceData(px.adj, px.close, px.splits, paid)
+
+
+def test_snapshot_dividends_come_from_the_payments_not_the_cash_flow_tag(payer):
+    fund, px = payer
+    snap = pit.priced_snapshot(fund, ASOF, px).set_index("ticker")
+    assert snap.loc["STDY", "dps_ttm"] == pytest.approx(1.00)      # not the tag's 0.40
+    assert snap.loc["STDY", "dividend_yield"] == pytest.approx(0.10)   # $1.00 on a $10 price
+    assert snap.loc["STDY", "payout_ratio"] == pytest.approx(0.50)     # of $2.00 of EPS
+    assert snap.loc["STDY", "dividend_growth_5y"] == pytest.approx(2 ** 0.2 - 1)
+    # a company that pays nothing yields nothing — it isn't unknown
+    assert snap.loc["PEAK", "dps_ttm"] == 0.0 and snap.loc["PEAK", "dividend_yield"] == 0.0
+    assert snap.loc["PEAK", "payout_ratio"] == 0.0  # it kept all of it
+    assert np.isnan(snap.loc["PEAK", "dividend_growth_5y"])  # no rate to grow
+
+
+def test_ddm_values_the_dividend_actually_paid_and_skips_a_non_payer(payer):
+    fund, px = payer
+    snap = pit.priced_snapshot(fund, ASOF, px, with_history=True).set_index("ticker")
+    v = add_valuation_models(snap, snap["price"], basis="latest")
+    a = ValuationAssumptions()
+    # $1.00 a share, grown at the terminal rate (its own 15% is capped there)
+    assert v.loc["STDY", "ddm_value"] == pytest.approx(
+        1.00 * (1 + a.terminal_growth) / (a.discount_rate - a.terminal_growth)
+    )
+    assert np.isnan(v.loc["PEAK", "ddm_value"])  # the cash-flow tag would have valued it
+
+
+def test_a_payer_keeps_its_dividend_without_the_price_cache(world):
+    """No dividend table at all falls back to the cash-flow tag, as before."""
+    fund, px = world
+    snap = pit.priced_snapshot(fund, ASOF, px, with_history=True).set_index("ticker")
+    assert (snap["dps_ttm"] == 0.0).all()  # nothing fetched means nothing to show
+    plain = snap.drop(columns=["dps_ttm", "dividend_yield"])
+    v = add_valuation_models(plain, plain["price"], basis="latest")
+    assert v.loc["STDY", "ddm_value"] > 0  # dividends_paid 40 over 100 shares
 
 
 def test_normalized_valuation_needs_the_history():
