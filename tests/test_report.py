@@ -54,6 +54,37 @@ def test_dividend_yield_renders_as_a_percent_and_a_non_payer_as_a_dash(ranked):
     assert '<td class="num">0.0%</td>' not in html  # BBB pays nothing, so it gets a dash
 
 
+def test_html_explains_every_model(ranked):
+    """The published page carries the equations, not just the ranked numbers."""
+    import html as html_mod
+
+    from lti.valuation import MODEL_DOCS, MODELS
+
+    page = report.render_html(ranked, asof="2026-09-05", params={})
+    assert '<details class="models">' in page  # collapsed, so the list still opens first
+    for m in MODELS:
+        doc = MODEL_DOCS[m]
+        assert f"<h3>{doc.label}</h3>" in page
+        assert html_mod.escape(doc.at_defaults) in page
+        assert html_mod.escape(doc.misleads) in page
+    assert "√(22.5 × EPS × book value per share)" in page
+
+
+def test_cli_explains_every_model(capsys):
+    """`lti explain-models` prints the equations for anyone not using the GUI."""
+    import argparse
+
+    from lti.cli import cmd_explain_models
+    from lti.valuation import MODEL_DOCS, MODELS
+
+    cmd_explain_models(argparse.Namespace(width=92))
+    out = capsys.readouterr().out
+    for m in MODELS:
+        assert MODEL_DOCS[m].label in out
+        assert MODEL_DOCS[m].formula in out  # formulas print unwrapped
+        assert m in out  # the column name, so the output maps onto the data
+
+
 def test_build_payload_shape_and_null_coercion(ranked):
     payload = report.build_payload(ranked, asof="2026-09-05", params={"top_n": 2})
     assert payload["asof"] == "2026-09-05"

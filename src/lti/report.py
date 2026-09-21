@@ -7,6 +7,10 @@ module is its headless twin. ``lti undervalued --out DIR`` calls
 
 Nothing here touches the network or SEC data: the input is a finished
 :func:`lti.valuation.rank_undervalued` result.
+
+The page carries the six equations as well as the ranked names — rendered from
+:data:`lti.valuation.MODEL_DOCS`, so the published explanation and the code that
+does the arithmetic can't drift apart.
 """
 
 from __future__ import annotations
@@ -18,6 +22,8 @@ import math
 from pathlib import Path
 
 import pandas as pd
+
+from lti.valuation import MODEL_DOCS, MODELS
 
 # Columns lifted from a rank_undervalued() result into the published table, in
 # display order. Mirrors cmd_undervalued's console view; missing ones are skipped.
@@ -187,12 +193,60 @@ td.upside { position: relative; }
 td.upside .val { position: relative; z-index: 1; color: var(--pos); font-weight: 600; }
 td.upside::before { content: ""; position: absolute; inset: 4px auto 4px 0;
   width: var(--w, 0%); background: var(--bar); border-radius: 3px; }
+details.models { margin-top: 26px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel); padding: 0 16px; }
+details.models > summary { cursor: pointer; padding: 14px 0; font-weight: 600; }
+details.models[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+details.models .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px; }
+.model { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.model:last-child { border-bottom: 0; }
+.model h3 { font-size: 0.95rem; margin: 0 0 6px; }
+.model code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem; background: color-mix(in srgb, var(--accent) 8%, transparent);
+  padding: 2px 6px; border-radius: 4px; display: inline-block; margin-bottom: 8px; }
+.model p { margin: 0 0 8px; font-size: 0.87rem; }
+.model dl { margin: 0; font-size: 0.83rem; color: var(--muted); }
+.model dt { font-weight: 600; color: var(--ink); float: left; clear: left; margin-right: 6px; }
+.model dd { margin: 0 0 4px; }
 .foot { color: var(--muted); font-size: 0.82rem; margin-top: 26px; }
 .foot ul { padding-left: 18px; margin: 8px 0; }
 .foot a, a { color: var(--accent); }
 .dl { display: inline-block; margin-top: 18px; font-size: 0.88rem; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
 """
+
+
+def render_models_html() -> str:
+    """The six equations, explained — rendered from :data:`lti.valuation.MODEL_DOCS`.
+
+    A ``<details>`` block so the page still opens on the list; everything inside
+    is static HTML, keeping the artifact script-free and self-contained.
+    """
+    blocks: list[str] = []
+    for m in MODELS:
+        d = MODEL_DOCS[m]
+        blocks.append(
+            f"""    <div class="model">
+      <h3>{html.escape(d.label)}</h3>
+      <code>{html.escape(d.formula)}</code>
+      <p>{html.escape(d.idea)} It takes {html.escape(d.inputs)}</p>
+      <dl>
+        <dt>At the default assumptions:</dt><dd>{html.escape(d.at_defaults)}</dd>
+        <dt>No value when:</dt><dd>{html.escape(d.silent)}</dd>
+        <dt>Where it misleads:</dt><dd>{html.escape(d.misleads)}</dd>
+      </dl>
+    </div>"""
+        )
+    return f"""<details class="models">
+  <summary>What each of the {len(MODELS)} equations does &mdash; and what it assumes</summary>
+  <p class="lede">Every fair value above is the median of these six, run on normalized earnings.
+    They are not six independent opinions: Lynch, both Grahams and earnings power all multiply
+    the same EPS, so they mostly restate that one number at different multiples. The DCF runs on
+    cash flow and the dividend discount on cash actually paid out &mdash; those two are the ones
+    that can disagree for a reason. The spread between them is as much the output as the median is.</p>
+{chr(10).join(blocks)}
+</details>"""
+
 
 _CAVEATS = """
 <ul>
@@ -201,7 +255,8 @@ _CAVEATS = """
       market-cap floor; commodity and crypto trusts are left out. Each filing&rsquo;s
       per-share figures are restated for any stock split since it was filed.</li>
   <li><strong>Fair value</strong> is the median of the DCF, Lynch, Graham (&times;2),
-      DDM and EPV models that produced a number, run on <em>normalized</em>
+      DDM and EPV models that produced a number (each equation is spelled out
+      above), run on <em>normalized</em>
       earnings &mdash; the median of the last five years&rsquo; EPS and free cash
       flow, not the latest year alone &mdash; with growth from the five-year revenue
       trend. <em>Upside</em> is fair value &divide; price &minus; 1. Ranked by upside,
@@ -275,6 +330,7 @@ def render_html(
     meta_line = f"As of <strong>{asof_disp}</strong> &middot; generated {gen_disp}"
     if summary:
         meta_line += f"<br>{summary}"
+    models = render_models_html()
 
     return f"""<!doctype html>
 <html lang="en">
@@ -291,6 +347,7 @@ def render_html(
   <p class="sub">The widest gaps between blended intrinsic value and price across the US 10-K universe.</p>
   <p class="meta">{meta_line}</p>
   {body}
+  {models}
   <div class="foot">
     <strong>How this works</strong>
     {_CAVEATS}

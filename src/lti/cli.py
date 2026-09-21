@@ -389,6 +389,42 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
         print(view.to_string(index=False))
 
 
+def cmd_explain_models(args: argparse.Namespace) -> None:
+    """Print what each intrinsic-value equation does, and what it assumes."""
+    import textwrap
+
+    from lti.valuation import MAX_UPSIDE, MIN_MODELS, MODEL_DOCS, MODELS, ValuationAssumptions
+
+    a = ValuationAssumptions()
+    width = max(60, min(args.width, 120))
+
+    def para(text: str, label: str = "", indent: str = "  ") -> None:
+        body = f"{label} {text}" if label else text
+        print(textwrap.fill(body, width=width, initial_indent=indent,
+                            subsequent_indent=indent + " " * (len(label) + 1 if label else 0)))
+
+    print(f"\nSix equations. Each fair value is the median of the ones that produced a number "
+          f"({MIN_MODELS} minimum).")
+    para(f"Defaults: discount rate {a.discount_rate:.1%} · terminal growth {a.terminal_growth:.1%} · "
+         f"DCF window {a.dcf_years}y · growth capped at {a.growth_cap:.0%} · AAA yield {a.bond_yield:.1%}",
+         indent="")
+    for m in MODELS:
+        d = MODEL_DOCS[m]
+        print(f"\n{d.label}  ({m})")
+        print(f"  {d.formula}")
+        print()
+        para(d.idea + " It takes " + d.inputs)
+        para(d.at_defaults, "At the defaults:")
+        para(d.silent, "No value when:")
+        para(d.misleads, "Where it misleads:")
+    print()
+    para("Four of the six multiply the same EPS, so six values agreeing is not six independent "
+         "opinions — the DCF (cash flow) and the dividend discount (cash actually paid out) are the "
+         f"two carrying separate evidence. The screen also drops an upside above {MAX_UPSIDE:+.0%} as "
+         "a data error. Rough, assumption-sensitive estimates — not investment advice.", indent="")
+    print()
+
+
 def cmd_smoke(args: argparse.Namespace) -> None:
     """Full smoke chain assuming `lti update` already ran with LTI_SMOKE=1."""
     from lti import fundamentals, prices
@@ -539,6 +575,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     jl = sub.add_parser("journal", help="every logged decision and what the stock did since")
     jl.set_defaults(func=cmd_journal)
+
+    em = sub.add_parser("explain-models", help="what each intrinsic-value equation does and assumes")
+    em.add_argument("--width", type=int, default=92, help="wrap width (60-120)")
+    em.set_defaults(func=cmd_explain_models)
 
     uv = sub.add_parser("undervalued", help="most undervalued names by blended intrinsic value")
     uv.add_argument("--asof", default=None, help="date (default today)")
