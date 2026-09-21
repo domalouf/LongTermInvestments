@@ -266,6 +266,53 @@ def test_valuation_models_math():
     assert np.isnan(out.loc[2, "ddm_value"])  # no dividend
 
 
+def test_every_model_is_documented_and_explained():
+    """MODEL_DOCS covers MODELS, and explain() prints the inputs each model ran on."""
+    from lti import valuation as val
+
+    assert list(val.MODEL_DOCS) == val.MODELS  # documented, in display order
+    for doc in val.MODEL_DOCS.values():
+        assert all(getattr(doc, f) for f in ("label", "formula", "idea", "inputs",
+                                             "at_defaults", "silent", "misleads"))
+
+    df = pd.DataFrame(
+        {
+            "eps": [3.05],
+            "book_value_per_share": [12.40],
+            "free_cash_flow": [210.0],
+            "shares_outstanding": [100.0],
+            "dps_ttm": [0.64],
+            "eps_growth_1y": [0.043],
+        },
+        index=pd.Index([1], name="cik"),
+    )
+    out = val.add_valuation_models(df, pd.Series({1: 30.0}), basis="latest")
+    row = out.loc[1]
+
+    # the inputs are recorded as fed, so a fair value can be checked against them
+    assert row["eps_used"] == pytest.approx(3.05)
+    assert row["bvps_used"] == pytest.approx(12.40)
+    assert row["fcf_ps_used"] == pytest.approx(2.10)
+    assert row["dps_used"] == pytest.approx(0.64)
+
+    a = val.ValuationAssumptions()
+    for m in val.MODELS:
+        line = val.explain(m, row, a)
+        assert line.endswith(f"= ${row[m]:,.2f}")  # the equation ends at the value it produced
+    assert val.explain("graham_number", row, a).startswith("√(22.5 × EPS $3.05 × BVPS $12.40)")
+    assert val.explain("epv_value", row, a) == "EPS $3.05 / 9.0% = $33.89"
+
+    # a model that can't answer says why, in its own documented words
+    loss = val.add_valuation_models(
+        df.assign(eps=-1.0, free_cash_flow=-50.0, dps_ttm=0.0), pd.Series({1: 30.0}), basis="latest"
+    ).loc[1]
+    for m in val.MODELS:
+        assert val.MODEL_DOCS[m].silent in val.explain(m, loss, a)
+
+    with pytest.raises(KeyError):
+        val.explain("not_a_model", row, a)
+
+
 def test_historical_cagr(fund):
     from lti import stock
     from lti.valuation import historical_cagr

@@ -303,7 +303,14 @@ with val_tab:
         )
 
 with fv_tab:
-    from lti.valuation import MODELS, ValuationAssumptions, add_valuation_models, historical_cagr
+    from lti.valuation import (
+        MODEL_DOCS,
+        MODELS,
+        ValuationAssumptions,
+        add_valuation_models,
+        explain,
+        historical_cagr,
+    )
 
     if annual.empty or not psym:
         st.info("Fair-value models need annual fundamentals and a cached price.")
@@ -429,9 +436,10 @@ with fv_tab:
 
             table = pd.DataFrame(
                 {
-                    "model": present,
+                    "model": [MODEL_DOCS[m].label for m in present],
                     "fair_value": [row[m] for m in present],
                     "upside_vs_price": [row[f"{m}_upside"] for m in present],
+                    "the arithmetic": [explain(m, row, assumptions) for m in present],
                 }
             )
             st.dataframe(
@@ -444,9 +452,35 @@ with fv_tab:
                     f"growth **{g_used:.1%}**" if pd.notna(g_used) else None,
                     f"dividend yield **{dy_used:.1%}**" if dy_used is not None and pd.notna(dy_used) else None,
                     f"discount rate **{disc:.1%}**"]
-            st.caption("Inputs: " + " · ".join(b for b in bits if b) + ". "
-                       "DCF uses FCF/share; EPV capitalises EPS with no growth; Graham number "
-                       "= √(22.5·EPS·BVPS); Lynch fair P/E = growth% + yield%; DDM is Gordon growth.")
+            st.caption("Inputs: " + " · ".join(b for b in bits if b) + ". Each model's equation, "
+                       "and where it breaks down, is spelled out below.")
+
+            with st.expander("What each equation does — and what it assumes"):
+                st.caption(
+                    "Same six models everywhere in this project. Each line below is the equation with "
+                    f"{symbol}'s own numbers in it, at the assumptions set above."
+                )
+                for m in MODELS:
+                    if m not in v.columns:
+                        continue
+                    doc = MODEL_DOCS[m]
+                    st.markdown(f"**{doc.label}** — `{doc.formula}`")
+                    st.markdown(
+                        f"{doc.idea} It takes {doc.inputs}\n\n"
+                        f"- **{symbol}:** {explain(m, row, assumptions)}\n"
+                        f"- **At the default assumptions:** {doc.at_defaults}\n"
+                        f"- **No value when:** {doc.silent}\n"
+                        f"- **Where it misleads:** {doc.misleads}"
+                    )
+                    st.markdown("")
+                st.markdown(
+                    f"**Blended** — the median of the {len(present)} models that produced a number "
+                    f"for {symbol}. A median so one model's extreme can't set the answer — but four of "
+                    "the six multiply the same EPS, so their agreement mostly restates that one number. "
+                    "The DCF (cash flow) and the dividend discount (cash actually paid out) are the two "
+                    "carrying separate evidence; the spread between all of them is the real output."
+                )
+
             st.warning(
                 "Rough estimates, sensitive to the assumptions above — normalized earnings assume "
                 "the last few years are a fair guide to the next. Not investment advice."

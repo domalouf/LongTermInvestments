@@ -71,6 +71,7 @@ lti factor-ic --start 2012-01-01 --horizon 12 --step 12
 lti factor-study                 # the pre-registered test of published factors (~5 min, see below)
 
 # 4c. Today's most undervalued steady earners by blended intrinsic value (normalized earnings)
+lti explain-models               # what each of the six equations does, and what it assumes
 lti undervalued --top 30 --market-cap-min 2000 --min-profit-years 4
 #     --include-financials    keep banks, insurers, REITs and BDCs
 #     --format html|json|csv  prints that instead of a table
@@ -456,19 +457,122 @@ or pass if it has lagged. Entries are append-only (`data/track/journal.jsonl`); 
 look is a `review` entry pointing at the original, and the page flags reviews that are due.
 
 ### Intrinsic-value models (`lti.valuation`)
-`add_valuation_models()` turns a fundamentals snapshot + price into a fair value per
-share for each of: **two-stage DCF** (FCF/share grown at the estimated rate for N years
-then a Gordon terminal value, discounted at the required return), **Peter Lynch** (fair
-P/E = earnings-growth % + dividend yield %), **Graham number** (√(22.5·EPS·BVPS)),
-**Graham revised** (EPS·(8.5+2g)·4.4/Y), **DDM** (Gordon growth on the last twelve
-months' dividends, grown at their own five-year rate where there is one, perpetual growth
-capped at the terminal rate) and **EPV** (no-growth capitalised earnings, EPS/r).
-`fair_value_est` is the median of the models that produced a number; `*_upside` is
-`fair value ÷ price − 1`. `basis="normalized"` (the default) feeds them normalized EPS,
-normalized FCF per share and the five-year revenue CAGR from `lti.history`;
-`basis="latest"` the latest 10-K and its one-year growth. Growth is clipped to
-`[0, cap]` either way. These are rough, assumption-sensitive estimates, not investment
-advice.
+`add_valuation_models()` turns a fundamentals snapshot + price into a fair value per share
+from six equations, and blends them into `fair_value_est` — the **median** of the ones that
+produced a number. `*_upside` is `fair value ÷ price − 1`.
+
+Same explanations everywhere: each equation is walked through in its function's docstring,
+carried as data in `MODEL_DOCS` for the Stock page, the Undervalued page and the published
+`index.html` to render, and `explain(model, row)` prints the equation with one company's own
+numbers in it (`EPS $3.05 / 9.0% = $33.89`). `add_valuation_models()` records the inputs it
+actually used — `eps_used`, `bvps_used`, `fcf_ps_used`, `dps_used`, `est_growth` — so any fair
+value can be checked against the numbers that produced it.
+
+#### What goes in
+
+| input | `basis="normalized"` (default) | `basis="latest"` |
+| --- | --- | --- |
+| EPS | median of the last 5 years' EPS (`eps_norm`) | the latest 10-K's EPS |
+| FCF per share | median 5-year FCF ÷ today's share count | (CFO − capex) ÷ shares, latest 10-K |
+| book value per share | equity ÷ shares outstanding | same |
+| dividend | last 12 months actually paid (`dps_ttm`), else the cash-flow tag | same |
+| growth `g` | 5-year revenue CAGR (`revenue_cagr`) | one-year EPS change, else revenue's |
+
+Per-share figures reach the models already restated onto today's share count for every split
+since each filing, and priced off the split-adjusted close (`lti.pit.priced_snapshot`, upstream)
+— without that, every ratio across a split is wrong. Growth is clipped to `[0, growth_cap]` — a 40% grower is
+not a 40% grower for a decade, and a negative one would value a shrinking business at less than
+zero. Pass an explicit `growth` Series (e.g. `historical_cagr(annual, "eps")`) to override the
+estimate. The rest is `ValuationAssumptions`: `discount_rate` (9%), `terminal_growth` (2.5%,
+forced at least a point below the discount rate), `dcf_years` (10), `bond_yield` (4.5%).
+
+#### The six equations
+
+| model | equation | multiplies | at the defaults | no value when |
+| --- | --- | --- | --- | --- |
+| Two-stage DCF | `Σ FCF·(1+g)ᵗ/(1+r)ᵗ + terminal/(1+r)ᴺ` | FCF/share | ≈19× FCF at 5% growth, 13× flat | FCF/share ≤ 0 |
+| Peter Lynch | `EPS · (g% + dividend yield%)` | EPS | fair P/E of 14 at 12% growth + 2% yield | EPS ≤ 0 |
+| Graham number | `√(22.5 · EPS · BVPS)` | EPS × book | 15× EPS at a 10% return on book | EPS or BVPS ≤ 0 |
+| Graham revised | `EPS · (8.5 + 2g) · 4.4/Y` | EPS | 8.3× EPS flat, 18.1× at 5%, 37.6× at the cap | EPS ≤ 0 |
+| Dividend discount | `D₀·(1+g) / (r − g)` | dividends paid | 15.8× the trailing dividend | no dividend |
+| Earnings power | `EPS / r` | EPS | a flat 11.1× EPS | EPS ≤ 0 |
+
+**Two-stage DCF.** A share is worth the cash the business will hand its owners, with cash
+further out worth less. Stage one walks free cash flow per share forward for `dcf_years`,
+growing it at `g` and discounting year *t* by `1/(1+r)ᵗ`. Stage two assumes the business then
+settles into growing at `terminal_growth` forever and capitalises that with Gordon growth —
+`FCF_N·(1+g_term)/(r − g_term)` — a lump sitting at year N, so it gets discounted back N years
+too. *The weak point:* that terminal lump is most of the answer (≈57% of it at 5% growth), so
+the value is largely a bet on the perpetuity, and it moves more on a point of the discount rate
+than on the entire explicit window.
+
+**Peter Lynch.** *One Up on Wall Street*'s rule of thumb: a growth company is fairly priced when
+its P/E equals its growth rate (PEG = 1), plus the dividend yield, since a payout is return that
+arrives whether or not the growth does. A 12% grower yielding 2% earns a fair P/E of 14; on $3
+of EPS that is $42. *The weak point:* a heuristic, not a valuation — no discount rate, no
+horizon, no balance sheet — and growth is the whole answer, making it the most sensitive of the
+six to a growth number that here comes from a revenue trend, not the analyst forecasts Lynch was
+reading. A profitable company with no growth and no dividend fairly values at $0.
+
+**Graham number.** The *Intelligent Investor* asks a defensive buyer for two things at once: no
+more than 15× earnings, and no more than 1.5× book. Multiply the limits and the constant is 22.5
+— the equation is that pair of screens rearranged, so a company may be dearer on one where it is
+cheaper on the other. Written as `√(15·EPS × 1.5·BVPS)` it is plainly the *geometric mean* of the
+two ceilings. *The weak point:* it is a ceiling for a defensive buy, not an estimate of worth,
+and half of it is book value — it understates asset-light businesses whose R&D and brands are
+expensed rather than capitalised, and flatters ones carrying goodwill from acquisitions that
+didn't work.
+
+**Graham revised.** Graham's 1962 multiple table: `8.5` is the P/E for a company expected to grow
+not at all, `2g` adds two turns of that multiple per point of annual growth (`g` in *percentage
+points* — 5 for 5%), and `4.4/Y` rescales the lot for interest rates, 4.4% having been the AAA
+corporate yield when he wrote it. `g` is clipped to 20 points and `Y` floored at 0.5% so a
+runaway growth estimate or a zero yield can't produce an absurd multiple. *The weak point:*
+Graham came to think it too crude to rely on; it is near-linear in `g`, and the rate term marks
+every company up as bond yields fall.
+
+**Dividend discount.** Gordon growth — the sum of a dividend growing at `g` forever, discounted
+at `r`, closes to `D₀·(1+g)/(r − g)`. `D₀` is the trailing twelve months of payments actually
+made (from the price cache, not the sparse cash-flow tag), grown at the dividend's *own* five-year
+rate where there is one, since a company can grow revenue and hold its payout flat. Growth is
+clipped to `terminal_growth`: as `g` approaches `r` the denominator goes to zero and the value to
+infinity. *The weak point:* that cap values a genuine dividend grower as if it grew 2.5% a year,
+so this is usually the lowest of the six, and buybacks and retained earnings are invisible to it —
+a company returning its cash by repurchase is worth nothing here.
+
+**Earnings power.** Greenwald's argument is that growth is the least knowable input, so the
+sturdier question is what the business is worth if it never grows: a perpetuity of today's
+earnings, `EPS / r`. *The weak point:* it is a single multiple, so it says as much about the
+discount rate you chose as about the company, and the textbook version adjusts for maintenance
+capex, excess cash and one-offs where this one capitalises reported EPS as it stands.
+
+#### Blending them, and a worked example
+
+A company with normalized EPS $3.05, book value per share $12.40, FCF per share $2.10, a $0.64
+trailing dividend and 4.3% growth, trading at $30 — the arithmetic the Stock page prints:
+
+| model | with its numbers in | fair value |
+| --- | --- | --- |
+| Two-stage DCF | 10 years of FCF/share $2.10 growing 4.3%, then 2.5% forever, discounted at 9.0% | **$37.92** |
+| Peter Lynch | EPS $3.05 × (growth 4.3 + yield 2.1) | **$19.62** |
+| Graham number | √(22.5 × EPS $3.05 × BVPS $12.40) | **$29.17** |
+| Graham revised | EPS $3.05 × (8.5 + 2 × 4.3) × 4.4 / 4.5 | **$51.00** |
+| Dividend discount | dividend $0.64 × (1 + 2.5%) / (9.0% − 2.5%) | **$10.09** |
+| Earnings power | EPS $3.05 / 9.0% | **$33.89** |
+
+`fair_value_est` is the median, $31.53, a +5% gap to the $30 price. A median rather than a mean
+so that one model's extreme — the $10.09 here — can't set the answer.
+
+Six values from $10 to $51 for the same company is the point, not a defect: the spread *is* the
+uncertainty, and a tight cluster deserves more weight than a high median. But six models agreeing
+is not six independent opinions — four of them (Lynch, both Grahams, earnings power) multiply the
+same EPS, so they mostly restate that one number at different multiples. The DCF (cash flow) and
+the dividend discount (cash actually paid out) are the two carrying separate evidence.
+
+The screen adds two credibility rules on top: at least `MIN_MODELS` (3) models must have produced
+a number, and an upside beyond `MAX_UPSIDE` (+500%) is treated as a data error rather than a
+bargain. And backtested, the widest gaps have *trailed* the average steady earner — these are
+rough, assumption-sensitive estimates for deciding what to research, not investment advice.
 
 ### Smoke mode
 
@@ -496,6 +600,7 @@ src/lti/
   metrics.py       P/E, P/B, PEG, EBIT/EV, ROIC, debt/equity, ROE, margins, growth, ...
   history.py       five years of filings, point in time: normalized EPS/FCF, consistency, growth
   valuation.py     intrinsic-value models (DCF, Lynch, Graham, DDM, EPV) + rank_undervalued
+                   MODEL_DOCS explains each equation; explain() prints it with a company's numbers
   report.py        render the undervalued list to static index.html / .json / .csv
   pit.py           point-in-time snapshots: split-correct, operating companies, priced
   ranking.py       ScreenSpec + composite percentile-rank selection

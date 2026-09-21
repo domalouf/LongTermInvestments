@@ -13,16 +13,16 @@ import lti.config as config
 from lti import prices as prices_mod, stock as stock_mod
 from lti.app import theme
 from lti.history import HISTORY_YEARS
-from lti.valuation import MIN_MODELS, MODELS, ValuationAssumptions, rank_undervalued
+from lti.valuation import (
+    MIN_MODELS,
+    MODEL_DOCS,
+    MODELS,
+    ValuationAssumptions,
+    explain,
+    rank_undervalued,
+)
 
-MODEL_LABELS = {
-    "dcf_value": "Two-stage DCF",
-    "lynch_fair_value": "Peter Lynch",
-    "graham_number": "Graham number",
-    "graham_intrinsic": "Graham revised",
-    "ddm_value": "Dividend discount",
-    "epv_value": "Earnings power",
-}
+MODEL_LABELS = {m: doc.label for m, doc in MODEL_DOCS.items()}
 
 theme.header(
     "🎯 Undervalued today",
@@ -307,6 +307,24 @@ theme.note(
     "cluster mostly restates that one number — the history chart is the better evidence."
 )
 
+with st.expander(f"What each of the {len(MODELS)} equations does — and what it assumes"):
+    st.caption(
+        "Every fair value on this page is the median of these six. They are not six independent "
+        "opinions: Lynch, both Grahams and earnings power all multiply the same normalized EPS, so "
+        "they mostly restate it at different multiples. The DCF runs on cash flow and the dividend "
+        "discount on cash actually paid out — those two are the ones that can disagree for a reason."
+    )
+    for m in MODELS:
+        doc = MODEL_DOCS[m]
+        st.markdown(f"**{doc.label}** — `{doc.formula}`")
+        st.markdown(
+            f"{doc.idea} It takes {doc.inputs}\n\n"
+            f"- **At the default assumptions:** {doc.at_defaults}\n"
+            f"- **No value when:** {doc.silent}\n"
+            f"- **Where it misleads:** {doc.misleads}"
+        )
+        st.markdown("")
+
 pick = st.selectbox(
     "Company",
     ranked["ticker"].tolist(),
@@ -350,6 +368,17 @@ with left:
             xaxis=dict(tickprefix="$", title="fair value per share", rangemode="tozero",
                        range=[0, max(max(amounts), price) * 1.22]),
             yaxis_title="",
+        )
+        # the arithmetic behind each bar, at the sidebar's assumptions
+        page_assumptions = ValuationAssumptions(
+            discount_rate=disc, terminal_growth=term, growth_cap=gcap
+        )
+        theme.note(
+            "<br>".join(
+                f"<b>{MODEL_DOCS[m].label}</b> &nbsp;{explain(m, row, page_assumptions)}"
+                for m in MODELS
+                if m in row.index and pd.notna(row[m])
+            )
         )
 
 with right:
