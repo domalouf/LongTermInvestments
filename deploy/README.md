@@ -52,6 +52,30 @@ deployed with that repo's `deploy/deploy.sh`.
 
 ### One-time setup — on the server (laptop)
 
+The server is `ssh lts` (Debian 13, x86_64). From a bare install it also needs
+`git rsync curl` from apt and **Python 3.12** — trixie's system Python is 3.13 and
+`python3.12` isn't packaged, so install it with mise, which fetches a precompiled
+build and needs no compiler (that box has no gcc):
+
+```bash
+curl https://mise.run | sh && mise use -g python@3.12
+git clone https://github.com/domalouf/LongTermInvestments.git ~/Projects/LongTermInvestments
+#   the repo is public, so over HTTPS the server needs no key of its own to pull
+cd ~/Projects/LongTermInvestments
+"$(mise which python --tool=python@3.12)" -m venv venv && source venv/bin/activate
+pip install -U pip && pip install -r requirements.txt && pip install -e ".[dev]"
+```
+
+Copy the data over rather than rebuilding it — `lti update` is a multi-hour pipeline:
+
+```bash
+# from the machine that already has it:
+rsync -a data/derived data/prices data/track lts:Projects/LongTermInvestments/data/
+rsync -a data/sec lts:Projects/LongTermInvestments/data/   # 12 GB, quarterly rebuilds only
+```
+
+Then:
+
 ```bash
 cd ~/Projects/LongTermInvestments
 git pull && pip install -e .            # picks up refresh-prices + the renderer
@@ -72,7 +96,20 @@ sudo loginctl enable-linger "$USER"
 ```
 
 Requires `ssh pi` to work non-interactively for the laptop's user (key in
-`~/.ssh/config`, same as the main PC — see the `pi-deployment` note).
+`~/.ssh/config`, same as the main PC — see the `pi-deployment` note). On the
+server, with the Pi powered on and reachable by mDNS:
+
+```bash
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519      # if it has no key yet
+printf 'Host pi\n    HostName raspberrypi.local\n    User domalouf\n' >> ~/.ssh/config
+ssh-copy-id pi                                        # asks for the Pi's password once
+ssh pi true && echo "pi reachable without a password"
+```
+
+Resolving `raspberrypi.local` needs `libnss-mdns` + `avahi-daemon` on the server
+(both are present on `lts`). Without this key the job still refreshes prices,
+records the track and writes the snapshot — only the final rsync to the Pi and
+`LTI_TRACK_BACKUP` fail.
 
 ### Check it
 
@@ -143,7 +180,9 @@ GUI can be down without affecting it.
 ### One-time — laptop server
 
 ```bash
-# 1. cloudflared  (Arch: `sudo pacman -S cloudflared`, or the official binary)
+# 1. cloudflared  (Debian: the official .deb; Arch: `sudo pacman -S cloudflared`)
+#    curl -fsSL -o /tmp/cf.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+#    sudo apt-get install -y /tmp/cf.deb
 cloudflared tunnel login                       # pick the domalouf.com zone
 cloudflared tunnel create invest               # note the UUID it prints
 cloudflared tunnel route dns invest invest.domalouf.com
