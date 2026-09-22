@@ -106,6 +106,18 @@ except RuntimeError as exc:
     st.error(str(exc))
     st.stop()
 
+if period_summary.empty:
+    # nothing was ever bought, so every statistic below is NaN and the charts are
+    # blank — the warnings are the whole answer, one per rebalance date
+    st.error(
+        "**No rebalance date produced a portfolio.** Nothing was bought, so there is nothing "
+        "to measure. The usual cause is filters that empty the universe — a market-cap floor "
+        "above every company, or a metric the fundamentals table doesn't carry for anyone. "
+        "Each warning below names a date and the reason."
+    )
+    widgets.warnings_expander(warnings, expanded=True)
+    st.stop()
+
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Strategy CAGR", f"{stats['port_cagr']:.1%}",
           f"{stats['excess_cagr_vs_univ']:+.1%} vs universe")

@@ -249,6 +249,28 @@ def test_universe_benchmark_is_every_ranked_stock_equal_weighted(world):
     assert {"company", "market_cap", "debt_to_equity", "universe_period_return"} <= set(r.holdings.columns)
 
 
+def test_a_screen_that_qualifies_nobody_still_reports_the_universe_stats(world):
+    """A filter that empties the universe is a dead end, not a crash.
+
+    Nothing is bought, so every figure is NaN — but the keys are still there, and
+    the warnings say which date failed and why. Readers of stats["univ_cagr"]
+    (the Backtest page, `lti factor-study`) would otherwise die on a KeyError
+    before they could show the warnings that explain it.
+    """
+    fund, px = world
+    cfg = BacktestConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=2),
+        start="2012-01-01", end="2020-06-01",
+        market_cap_min=1e15,  # more than any company in the world is worth
+    )
+    r = run_backtest(cfg, fund, px)
+
+    assert r.period_summary.empty and r.holdings.empty
+    assert {"univ_cagr", "excess_cagr_vs_univ", "port_cagr"} <= set(r.stats)
+    assert np.isnan(r.stats["univ_cagr"]) and np.isnan(r.stats["excess_cagr_vs_univ"])
+    assert any("no picks" in w for w in r.warnings)
+
+
 def test_backtest_defaults_to_an_april_rebalance(world):
     fund, px = world
     r = run_backtest(BacktestConfig(screen=ScreenSpec(metrics=["roe"], top_n=2), market_cap_min=0.0), fund, px)

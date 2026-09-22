@@ -98,7 +98,10 @@ def summarize(
         "port_max_dd_peak": p_peak,
         "port_max_dd_trough": p_trough,
     }
-    if universe is not None and len(universe) > 1:
+    # emitted whenever a universe was measured at all, NaN where the curve is too
+    # short to say anything: a caller reading stats["univ_cagr"] shouldn't have to
+    # know whether this particular run got as far as trading
+    if universe is not None:
         stats["univ_cagr"] = cagr(universe)
         stats["excess_cagr_vs_univ"] = stats["port_cagr"] - stats["univ_cagr"]
         stats["univ_total_return"] = total_return(universe)

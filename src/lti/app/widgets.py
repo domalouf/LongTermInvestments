@@ -80,10 +80,10 @@ def run_gate(name: str, clicked: bool, cfg_key: str, prompt: str) -> None:
         st.stop()
 
 
-def warnings_expander(warnings: list[str]) -> None:
-    """A run's warnings, folded away."""
+def warnings_expander(warnings: list[str], expanded: bool = False) -> None:
+    """A run's warnings, folded away — or open, where they are the whole answer."""
     if warnings:
-        with st.expander(f"Warnings ({len(warnings)})"):
+        with st.expander(f"Warnings ({len(warnings)})", expanded=expanded):
             for w in warnings:
                 st.text(w)
 
