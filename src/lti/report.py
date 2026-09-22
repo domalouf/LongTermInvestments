@@ -71,9 +71,6 @@ _NUMERIC_COLUMNS = {
     "debt_to_equity",
 }
 
-_ARTIFACT_NAMES = ("index.html", "undervalued.json", "undervalued.csv")
-
-
 # --- shared shaping -------------------------------------------------------
 
 

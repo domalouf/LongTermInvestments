@@ -11,11 +11,10 @@ from __future__ import annotations
 
 import json
 
-import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lti.app import theme
+from lti.app import theme, widgets
 from lti.factor import ALL_METRICS, ICConfig, compute_ic
 
 theme.header(
@@ -89,13 +88,7 @@ cfg_key = json.dumps(
     }
 )
 
-# A button is only True on the rerun its click triggers; remember what was run so
-# picking a metric in the charts below doesn't blank the page.
-if go_btn:
-    st.session_state["factor_key"] = cfg_key
-if st.session_state.get("factor_key") != cfg_key:
-    st.info("Set the parameters in the sidebar and hit **Run analysis**.")
-    st.stop()
+widgets.run_gate("factor", go_btn, cfg_key, "Set the parameters in the sidebar and hit **Run analysis**.")
 
 try:
     summary, ic_by_period, n_by_period, bucket_returns, warnings = _run(cfg_key)
@@ -143,8 +136,7 @@ fig = go.Figure(
         hovertemplate="<b>%{y}</b><br>mean IC %{x:.3f}<br>t %{customdata[0]:.2f} over %{customdata[1]:.0f} periods<extra></extra>",
     )
 )
-fig.update_traces(marker_line_width=0, marker_cornerradius=4)
-fig.update_layout(bargap=0.34)
+theme.bar_marks(fig, color=None)
 theme.zero_line(fig, axis="x")
 theme.show(fig, height=max(320, 26 * len(ms) + 70), legend=False,
            xaxis_title="mean information coefficient", yaxis_title="")
@@ -166,8 +158,7 @@ else:
             hovertemplate="%{x|%b %Y}<br>IC %{y:.3f}<extra></extra>",
         )
     )
-    bar.update_traces(marker_line_width=0, marker_cornerradius=4)
-    bar.update_layout(bargap=0.34)
+    theme.bar_marks(bar, color=None)
     theme.zero_line(bar, axis="y")
     bar.add_hline(y=series.mean(), line_width=1.5, line_color=theme.INK_2)
     bar.add_annotation(
@@ -203,10 +194,7 @@ with st.expander("IC by period (table)"):
     st.dataframe(ic_by_period.round(3), width="stretch")
     st.download_button("Download IC-by-period CSV", ic_by_period.to_csv().encode(), "ic_by_period.csv", "text/csv")
 
-if warnings:
-    with st.expander(f"Warnings ({len(warnings)})"):
-        for w in warnings:
-            st.text(w)
+widgets.warnings_expander(warnings)
 
 st.info(
     "**Caveats.** Univariate IC ignores that metrics are correlated with each other "

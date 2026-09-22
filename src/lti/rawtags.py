@@ -120,6 +120,32 @@ def _coalesce(df: pd.DataFrame, cols: list[str]) -> pd.Series:
     return out
 
 
+def _scan_quarters(read, label: str) -> pd.DataFrame:
+    """``read`` every quarter directory and stack what comes back, one row per filing.
+
+    A filing can appear in more than one quarter zip; the later copy wins.
+    """
+    qdirs = _quarter_dirs()
+    frames = []
+    for i, qdir in enumerate(qdirs, 1):
+        rows = read(qdir)
+        if rows is not None:
+            frames.append(rows)
+        if i % 10 == 0 or i == len(qdirs):
+            LOGGER.info("rawtags: scanned %d/%d quarters (%s)", i, len(qdirs), label)
+    if not frames:
+        raise RuntimeError(f"no usable {label} data found under data/sec/parquet/quarter")
+    return pd.concat(frames, ignore_index=True).drop_duplicates("adsh", keep="last")
+
+
+def _write_cache(df: pd.DataFrame, out_path: Path) -> pd.DataFrame:
+    """Write a derived table to its parquet cache and hand it straight back."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_path, index=False)
+    LOGGER.info("rawtags: wrote %d rows -> %s", len(df), out_path)
+    return df
+
+
 def _sum_present(df: pd.DataFrame, cols: list[str]) -> pd.Series:
     """Sum of whichever of ``cols`` are reported; NaN when none of them are."""
     present = [c for c in cols if c in df.columns]
@@ -132,31 +158,24 @@ def _sum_present(df: pd.DataFrame, cols: list[str]) -> pd.Series:
 # --- SIC --------------------------------------------------------------------
 
 
+def _read_quarter_sic(qdir: Path) -> pd.DataFrame | None:
+    sub = qdir / "sub.txt.parquet"
+    if not sub.exists():
+        LOGGER.warning("rawtags: %s has no sub.txt.parquet; skipping", qdir.name)
+        return None
+    return pd.read_parquet(sub, columns=["adsh", "sic"])
+
+
 def build_sic_map(force: bool = False) -> pd.DataFrame:
     """``adsh -> sic`` for every indexed filing, cached to ``sic_by_adsh.parquet``."""
     out_path = config.get_paths().sic_parquet
     if out_path.exists() and not force:
         return pd.read_parquet(out_path)
 
-    frames = []
-    for qdir in _quarter_dirs():
-        sub = qdir / "sub.txt.parquet"
-        if not sub.exists():
-            LOGGER.warning("rawtags: %s has no sub.txt.parquet; skipping", qdir.name)
-            continue
-        frames.append(pd.read_parquet(sub, columns=["adsh", "sic"]))
-
-    if not frames:
-        raise RuntimeError("no sub.txt.parquet files found under data/sec/parquet/quarter")
-
-    df = pd.concat(frames, ignore_index=True).dropna(subset=["adsh"])
-    df = df.drop_duplicates("adsh", keep="last")
+    df = _scan_quarters(_read_quarter_sic, "SIC").dropna(subset=["adsh"])
     df["sic"] = pd.to_numeric(df["sic"], errors="coerce").astype("Int32")
 
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(out_path, index=False)
-    LOGGER.info("rawtags: wrote %d adsh->sic rows -> %s", len(df), out_path)
-    return df
+    return _write_cache(df, out_path)
 
 
 # --- raw balance-sheet tags -------------------------------------------------
@@ -313,24 +332,10 @@ def build_raw_bs_tags(force: bool = False) -> pd.DataFrame:
     if out_path.exists() and not force:
         return pd.read_parquet(out_path)
 
-    qdirs = _quarter_dirs()
-    frames = []
-    for i, qdir in enumerate(qdirs, 1):
-        wide = _read_quarter_tags(qdir, RAW_BS_TAGS, qtrs=0)
-        if wide is not None:
-            frames.append(wide)
-        if i % 10 == 0 or i == len(qdirs):
-            LOGGER.info("rawtags: scanned %d/%d quarters", i, len(qdirs))
-
-    if not frames:
-        raise RuntimeError("no usable num.txt.parquet files found")
-
-    df = pd.concat(frames, ignore_index=True)
+    df = _scan_quarters(lambda qdir: _read_quarter_tags(qdir, RAW_BS_TAGS, qtrs=0), "BS")
     for col in RAW_BS_TAGS:
         if col not in df.columns:
             df[col] = np.nan
-    # a filing can appear in more than one quarter zip; the later copy wins
-    df = df.drop_duplicates("adsh", keep="last")
     df = _derive_debt(df)
 
     keep = [
@@ -346,11 +351,7 @@ def build_raw_bs_tags(force: bool = False) -> pd.DataFrame:
     df = df[keep].rename(
         columns={"PropertyPlantAndEquipmentNet": "ppe_net", "Goodwill": "goodwill"}
     )
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(out_path, index=False)
-    LOGGER.info("rawtags: wrote %d rows -> %s", len(df), out_path)
-    return df
+    return _write_cache(df, out_path)
 
 
 # --- raw income-statement tags ---------------------------------------------
@@ -371,30 +372,13 @@ def build_raw_is_tags(force: bool = False) -> pd.DataFrame:
     if out_path.exists() and not force:
         return pd.read_parquet(out_path)
 
-    qdirs = _quarter_dirs()
-    frames = []
-    for i, qdir in enumerate(qdirs, 1):
-        wide = _read_quarter_tags(qdir, RAW_IS_TAGS, qtrs=4)
-        if wide is not None:
-            frames.append(wide)
-        if i % 10 == 0 or i == len(qdirs):
-            LOGGER.info("rawtags: scanned %d/%d quarters (IS)", i, len(qdirs))
-
-    if not frames:
-        raise RuntimeError("no usable num.txt.parquet files found")
-
-    df = pd.concat(frames, ignore_index=True)
+    df = _scan_quarters(lambda qdir: _read_quarter_tags(qdir, RAW_IS_TAGS, qtrs=4), "IS")
     if "OperatingIncomeLoss" not in df.columns:
         df["OperatingIncomeLoss"] = np.nan
-    df = df.drop_duplicates("adsh", keep="last")
     df = df[["adsh", "OperatingIncomeLoss"]].rename(
         columns={"OperatingIncomeLoss": "operating_income_reported"}
     )
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(out_path, index=False)
-    LOGGER.info("rawtags: wrote %d rows -> %s", len(df), out_path)
-    return df
+    return _write_cache(df, out_path)
 
 
 # --- share counts -------------------------------------------------------------
@@ -520,24 +504,7 @@ def build_raw_share_tags(force: bool = False) -> pd.DataFrame:
     if out_path.exists() and not force:
         return pd.read_parquet(out_path)
 
-    qdirs = _quarter_dirs()
-    frames = []
-    for i, qdir in enumerate(qdirs, 1):
-        summary = _read_quarter_shares(qdir)
-        if summary is not None:
-            frames.append(summary)
-        if i % 10 == 0 or i == len(qdirs):
-            LOGGER.info("rawtags: scanned %d/%d quarters (shares)", i, len(qdirs))
-
-    if not frames:
-        raise RuntimeError("no usable num.txt.parquet files found")
-
-    # a filing can appear in more than one quarter zip; the later copy wins
-    df = pd.concat(frames, ignore_index=True).drop_duplicates("adsh", keep="last")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_parquet(out_path, index=False)
-    LOGGER.info("rawtags: wrote %d rows -> %s", len(df), out_path)
-    return df
+    return _write_cache(_scan_quarters(_read_quarter_shares, "shares"), out_path)
 
 
 # Two share counts agree within this factor: wide enough for a weighted average

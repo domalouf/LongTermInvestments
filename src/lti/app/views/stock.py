@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lti import prices as prices_mod, stock as stock_mod
-from lti.app import theme
+from lti.app import theme, widgets
 
 theme.header(
     "🔬 Stock detail",
@@ -17,19 +17,7 @@ theme.header(
 )
 
 
-@st.cache_data(show_spinner=False)
-def _load_fund() -> pd.DataFrame:
-    from lti.fundamentals import load_fundamentals
-
-    return load_fundamentals()
-
-
-try:
-    fund = _load_fund()
-except FileNotFoundError:
-    st.error("No fundamentals table. Run `lti build-fundamentals` first.")
-    st.stop()
-
+fund = widgets.fundamentals()
 px = prices_mod.load_price_data()
 panel = px.adj  # total return: the price chart
 
@@ -415,8 +403,7 @@ with fv_tab:
                     hovertemplate="%{y}<br>$%{x:,.2f} per share<extra></extra>",
                 )
             )
-            fig.update_traces(marker_line_width=0, marker_cornerradius=4)
-            fig.update_layout(bargap=0.4)
+            theme.bar_marks(fig, color=None, gap=0.4)
             fig.add_vline(x=cur_price, line_width=1.5, line_color=theme.INK_2)
             fig.add_annotation(
                 x=cur_price, y=1.0, yref="paper", yanchor="bottom", xanchor="left",
@@ -460,19 +447,8 @@ with fv_tab:
                     "Same six models everywhere in this project. Each line below is the equation with "
                     f"{symbol}'s own numbers in it, at the assumptions set above."
                 )
-                for m in MODELS:
-                    if m not in v.columns:
-                        continue
-                    doc = MODEL_DOCS[m]
-                    st.markdown(f"**{doc.label}** — `{doc.formula}`")
-                    st.markdown(
-                        f"{doc.idea} It takes {doc.inputs}\n\n"
-                        f"- **{symbol}:** {explain(m, row, assumptions)}\n"
-                        f"- **At the default assumptions:** {doc.at_defaults}\n"
-                        f"- **No value when:** {doc.silent}\n"
-                        f"- **Where it misleads:** {doc.misleads}"
-                    )
-                    st.markdown("")
+                shown = [m for m in MODELS if m in v.columns]
+                widgets.model_notes(shown, {m: explain(m, row, assumptions) for m in shown}, symbol)
                 st.markdown(
                     f"**Blended** — the median of the {len(present)} models that produced a number "
                     f"for {symbol}. A median so one model's extreme can't set the answer — but four of "

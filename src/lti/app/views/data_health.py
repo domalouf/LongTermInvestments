@@ -177,8 +177,8 @@ else:
     # only companies fetch-prices would fill: warrants, preferreds and tickers
     # without a share count sit in the cache too, but no screen can price them,
     # and a ticker Yahoo has stopped serving ("no_data") can't be backfilled
-    _meta = prices._load_meta()
-    _gone = set(_meta.loc[_meta["status"] == "no_data", "ticker"]) if not _meta.empty else set()
+    meta = prices._load_meta()
+    _gone = set(meta.loc[meta["status"] == "no_data", "ticker"]) if not meta.empty else set()
     unbackfilled = (
         len((_universe & set(_panel.columns)) - set(_px.close.columns) - _gone) if _px is not None else 0
     )
@@ -199,15 +199,9 @@ else:
         "backtest result is optimistic — most of all for deep-value screens, which "
         "select exactly the distressed names that don't come back."
     )
-    try:
-        from lti import prices as _pm
-
-        meta = _pm._load_meta()
-        if not meta.empty:
-            with st.expander("Fetch status by ticker"):
-                st.dataframe(
-                    meta["status"].value_counts().rename_axis("status").reset_index(name="tickers"),
-                    hide_index=True,
-                )
-    except Exception:  # noqa: BLE001
-        pass
+    if not meta.empty:
+        with st.expander("Fetch status by ticker"):
+            st.dataframe(
+                meta["status"].value_counts().rename_axis("status").reset_index(name="tickers"),
+                hide_index=True,
+            )

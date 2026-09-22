@@ -13,7 +13,6 @@ import logging
 import lti.config as config
 from lti import rawtags, sec_update, sectors, tickers
 
-import numpy as np
 import pandas as pd
 
 LOGGER = logging.getLogger(__name__)

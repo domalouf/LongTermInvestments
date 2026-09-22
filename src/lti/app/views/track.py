@@ -90,8 +90,7 @@ else:
             hovertemplate="%{y}<br>%{x:+.1%} vs the universe<extra></extra>",
         )
     )
-    fig.update_traces(marker_line_width=0, marker_cornerradius=4)
-    fig.update_layout(bargap=0.4)
+    theme.bar_marks(fig, color=None, gap=0.4)
     theme.zero_line(fig, axis="x")
     theme.show(fig, height=max(240, 44 * len(bars) + 80), legend=False,
                xaxis=dict(tickformat="+.1%", title=f"average {h}-month return minus the universe's"), yaxis_title="")

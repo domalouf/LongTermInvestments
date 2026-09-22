@@ -77,16 +77,12 @@ def summarize_history(hist: pd.DataFrame, splits: pd.DataFrame | None = None, mi
         return pd.DataFrame(index=pd.Index([], name="cik"))
 
     h = hist.sort_values(["cik", "period_end"]).copy()
-    eps = h["eps"].astype("float64") if "eps" in h.columns else pd.Series(np.nan, index=h.index)
+    eps = metrics._col(h, "eps")
     if "ticker" in h.columns and "filed" in h.columns:
         eps = eps / pit.split_factor_after(h["ticker"], h["filed"], splits)
     h["eps_restated"] = eps
-    ni = h["net_income"].astype("float64") if "net_income" in h.columns else pd.Series(np.nan, index=h.index)
-    op = (
-        h["operating_income_reported"].astype("float64")
-        if "operating_income_reported" in h.columns
-        else pd.Series(np.nan, index=h.index)
-    )
+    ni = metrics._col(h, "net_income")
+    op = metrics._col(h, "operating_income_reported")
     # profitable only if every signal reported for the year is positive; NaN if none is
     signals = pd.concat([(x > 0).astype("float64").where(x.notna()) for x in (eps, ni, op)], axis=1)
     h["profitable"] = signals.min(axis=1)
@@ -207,7 +203,7 @@ def add_history(
     """
     summary = summarize_history(history_asof(fund[fund["cik"].isin(snap.index)], asof, years), splits)
     out = snap.join(summary, how="left")
-    shares = out["shares_outstanding"] if "shares_outstanding" in out.columns else pd.Series(np.nan, index=out.index)
+    shares = metrics._col(out, "shares_outstanding")
     out["fcf_ps_norm"] = metrics._safe_div(out["fcf_norm"], shares)
     if "price" in out.columns:
         price = out["price"]

@@ -66,11 +66,3 @@ def get_cik_ticker_map(refresh: bool = False) -> pd.DataFrame:
     if refresh or not path.exists():
         return refresh_cik_ticker_map()
     return pd.read_parquet(path)
-
-
-def ticker_for_cik(cik: int) -> str | None:
-    df = get_cik_ticker_map()
-    hit = df.loc[df["cik"] == int(cik), "ticker"]
-    if hit.empty or pd.isna(hit.iloc[0]):
-        return None
-    return str(hit.iloc[0])

@@ -69,6 +69,9 @@ HISTORY_METRICS = [
 # the latest year alone — what the Undervalued page ranked on before.
 VALUATION_METRICS = ["fair_value_upside", "fair_value_upside_1y"]
 
+# every metric a screen can rank on, in menu order
+ALL_METRICS = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
+
 # lower value = "better" (used as the default sort direction in ranking)
 LOWER_IS_BETTER = {"pe", "pb", "debt_to_equity", "peg", "pe_norm", "accruals", "share_growth", "asset_growth"}
 
@@ -84,6 +87,17 @@ MAGIC_FORMULA_METRICS = ["ebit_ev", "roic"]
 def _safe_div(num: pd.Series, den: pd.Series) -> pd.Series:
     out = num / den.replace(0, np.nan)
     return out.replace([np.inf, -np.inf], np.nan)
+
+
+def _col(df: pd.DataFrame, name: str) -> pd.Series:
+    """``df[name]`` as floats, or an all-NaN column when the frame hasn't got it.
+
+    Every frame here is assembled from whatever the filings carried, so a column
+    being absent and a column being empty mean the same thing to a metric.
+    """
+    if name in df.columns:
+        return df[name].astype("float64")
+    return pd.Series(np.nan, index=df.index, dtype="float64")
 
 
 def ebit(df: pd.DataFrame) -> pd.Series:
@@ -118,7 +132,8 @@ def ebit(df: pd.DataFrame) -> pd.Series:
 
 def add_fundamental_metrics(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    equity_pos = df["equity"].where(df["equity"] > 0) if "equity" in df else pd.Series(np.nan, index=df.index)
+    equity = _col(df, "equity")
+    equity_pos = equity.where(equity > 0)
 
     if {"liabilities", "equity"} <= set(df.columns):
         df["debt_to_equity"] = _safe_div(df["liabilities"], equity_pos)
@@ -261,7 +276,7 @@ def add_yield_metrics(df: pd.DataFrame) -> pd.DataFrame:
         return df
     df = df.copy()
     mcap = df["market_cap"].where(df["market_cap"] > 0)
-    ev = df["enterprise_value"] if "enterprise_value" in df.columns else pd.Series(np.nan, index=df.index)
+    ev = _col(df, "enterprise_value")
 
     if "free_cash_flow" in df.columns:
         df["fcf_yield"] = _safe_div(df["free_cash_flow"], mcap)
