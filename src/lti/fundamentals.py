@@ -181,6 +181,30 @@ def _add_prior_year(df: pd.DataFrame) -> pd.DataFrame:
     return _lag_prior_period(df, _PRIOR_YEAR_COLS)
 
 
+def add_free_cash_flow(df: pd.DataFrame) -> pd.DataFrame:
+    """``free_cash_flow``: operating cash flow, less capex, less stock-based pay.
+
+    Operating cash flow adds stock compensation back as a non-cash expense, but
+    it is a real cost: staff paid in shares instead of cash, the bill landing on
+    the owners as dilution — or as the buybacks that offset it, which are cash.
+    Left in, it flatters exactly the companies that pay most in stock, and every
+    model built on free cash flow inherits that: the DCF, ``fcf_yield``,
+    ``fcf_margin``, cash conversion.
+
+    ``free_cash_flow_reported`` keeps the textbook ``cfo − |capex|``. A filing
+    with no stock-comp line on its cash-flow statement is taken to have none —
+    the line is where material stock pay shows — which leaves its free cash flow
+    as it was. A stock-comp figure too large by a scale error only pushes a
+    company down the cash-yield rankings and out of the DCF, never up them.
+    """
+    if not {"cfo", "capex"} <= set(df.columns):
+        return df
+    df["free_cash_flow_reported"] = df["cfo"] - df["capex"].abs()
+    sbc = df["stock_comp"].abs().fillna(0.0) if "stock_comp" in df.columns else 0.0
+    df["free_cash_flow"] = df["free_cash_flow_reported"] - sbc
+    return df
+
+
 # --- public API ----------------------------------------------------------
 
 
@@ -255,8 +279,7 @@ def build_fundamentals(smoke: bool = False, quarters: list[str] | None = None) -
     merged = rawtags.reconcile_shares(merged)
 
     # convenience columns
-    if "capex" in merged.columns and "cfo" in merged.columns:
-        merged["free_cash_flow"] = merged["cfo"] - merged["capex"].abs()
+    merged = add_free_cash_flow(merged)
     if {"total_debt", "cash"} <= set(merged.columns):
         # unknown debt stays unknown — treating it as zero would make leveraged
         # companies look cheap, which is the exact error EV is meant to avoid.
@@ -302,6 +325,9 @@ def load_fundamentals(smoke: bool | None = None) -> pd.DataFrame:
     if "filed_prev" not in df.columns and "filed" in df.columns:
         # built before the column existed; it derives exactly from what's here
         df = _lag_prior_period(df, {"filed": "filed_prev"})
+    if "free_cash_flow_reported" not in df.columns:
+        # built before stock-based pay came out of free cash flow; likewise
+        df = add_free_cash_flow(df)
     return df
 
 

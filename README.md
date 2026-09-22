@@ -58,10 +58,14 @@ lti refresh-tickers
 lti fetch-prices                 # thousands of tickers via yfinance — takes about an hour
 lti refresh-prices              # later: cheap daily top-up of already-cached tickers
 
-# 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe)
+# 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe),
+#    after 10 bps a trade — see "Trading costs and taxes" below
 lti backtest --metrics pe,debt_to_equity --top-n 10 --start 2011-01-01
 lti backtest --metrics pe,debt_to_equity --top-n 10 --all-months   # the same, once per rebalance month
 lti rolling-backtest --metrics pe,debt_to_equity --top-n 10 --windows 3,5   # over every 3- and 5-year window
+#     --cost-bps 0            gross: no trading costs
+#     --taxable               tax dividends and realized gains (--short-term-tax, --long-term-tax, --dividend-tax)
+#     --hold-past-year        wait a year and a day between rebalances, so every gain is long-term
 
 # 4a. Greenblatt's Magic Formula (EBIT/EV + return on capital, no financials/utilities)
 lti backtest --magic-formula --top-n 30 --start 2013-01-01
@@ -188,6 +192,75 @@ Note that this changes no return anywhere: `adj_close.parquet` has always been a
 total-return series, so the backtests, the factor study and the forward track record
 already counted every dividend. What is new is being able to *see* and *rank on* them.
 
+### Free cash flow and stock-based pay
+
+`free_cash_flow` is operating cash flow less capex **less stock-based compensation**. The
+cash-flow statement adds stock pay back as a non-cash expense, but paying staff in shares is
+still paying them: the cost lands on the owners as dilution, or as the buybacks spent
+offsetting it. Left in, it flatters exactly the companies that pay most in stock, and
+everything built on free cash flow inherits that — the DCF, `fcf_yield`, `fcf_yield_norm`,
+`fcf_margin`, and cash conversion on the Undervalued page.
+
+The figure is the `ShareBasedCompensation` line of the standardized cash-flow statement
+(`stock_comp`). A filing without one is taken to have none, which leaves its free cash flow
+as it was — the line is where material stock pay shows. A stock-comp figure too large by a
+scale error can only push a company *down* the cash rankings and out of the DCF, never up.
+`free_cash_flow_reported` keeps the textbook `cfo − |capex|`, and the Stock page's cash-flow
+tab charts `stock_comp` beside the others. A fundamentals table built before this is
+upgraded as it loads; no rebuild needed. The Undervalued page's backtest figures quoted
+below predate the change.
+
+Two things stay on the old definition on purpose, via `study.as_registered`: the
+pre-registered factor study, and the track record's *quality + value* strategy, which tests
+the study's composite. Changing a registered hypothesis's inputs after seeing its result is
+what pre-registration exists to prevent.
+
+### Trading costs and taxes
+
+A gross backtest trades at the close for free and never pays tax, which flatters a strategy
+that turns over every year against SPY, bought once and held. So every backtest — the
+Backtest and Rolling pages, `lti backtest`, `lti rolling-backtest` — runs the strategy, its
+universe and SPY a second time as a book of tax lots (`lti.frictions.Book`), and reports that:
+
+- **Trading costs.** Every dollar traded pays `--cost-bps` of itself each way — the
+  half-spread plus any commission. The default, 10 bps, is a middle estimate for the $500M+
+  companies these screens buy: large caps trade tighter, small caps wider. It's charged on
+  the actual trades — selling what dropped out, buying what came in, and trimming or topping
+  up what stayed back to equal weight. `--cost-bps 0` gives the gross backtest.
+- **Taxes** (`--taxable`, or the *Taxable account* toggle; off is an IRA or 401(k)).
+  Dividends are taxed as they arrive and only the rest is reinvested — each holding's
+  dividend being its total return less its price return, `adj_close` against `close`. Gains
+  are taxed when a sale realizes them: at the short-term rate for a lot held a year or less,
+  the long-term rate for one held longer, oldest lot first, with losses offsetting gains and
+  the rest carried forward. The defaults — 24% short-term, 15% long-term and on dividends —
+  are a middle federal bracket with no state tax: set your own.
+- **The same rules for all three.** The universe pays them on its own, smaller, turnover,
+  so the gap to it is what the ranking adds after paying for the trading it takes. SPY pays
+  the cost once and the tax on its dividends — and, never being sold, nothing on its gains.
+  *Sold at the end* (`*_cagr_liquidated`) puts all three on the same footing: the CAGR had
+  everything been sold on the last day, paying the tax on every gain still unrealized.
+
+**The one-year trap.** A gain is long-term only if the lot was held *more* than a year. The
+annual rebalance falls on the first trading day of the month, which in most years is on or
+before the anniversary of the last one — April 1, 2013 to April 1, 2014 is a year to the
+day, so short-term. Left alone, most of an annual strategy's gains are taxed as income.
+`--hold-past-year` (*Sell only after a full year*) waits until a year and a day have
+passed, which drifts the rebalance a few days later each year. It's half of what Greenblatt
+advises for running the Magic Formula in a taxable account; the other half, selling losers
+just *before* the year, would need two trading dates a year.
+
+Each backtest reports, beside the usual statistics (which are now net): `*_cagr_gross`,
+`*_costs_pa` and `*_taxes_pa` (the average paid per rebalance period, as a share of the
+portfolio), `*_cagr_liquidated`, and `port_short_term_share`; each period adds
+`port_return_gross`, `turnover` (one-way), `costs`, `taxes` and the realized gains by
+term. Left out: the $3,000 of losses a year that can offset ordinary income (a fixed sum,
+meaningless at an arbitrary portfolio size), wash sales, and the delay to the following
+April — tax is paid when the gain is realized, which is slightly conservative.
+
+**Returns quoted elsewhere in this README were measured gross, before this existed** —
+rerun with `--cost-bps 0` to reproduce them. The factor study's backtests stay gross, as
+registered.
+
 ## GUI
 
 ```bash
@@ -279,8 +352,9 @@ PP&E, interest-bearing debt, as-reported operating income and share counts from 
 ### 🧪 Backtest — simulate a strategy vs SPY and vs its own universe
 Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month** —
 April by default, when calendar-year 10-Ks are in; in January a screen ranks on
-fundamentals a median of a year old — **Min market cap**, **Initial capital**); hit
-**Run backtest**.
+fundamentals a median of a year old — **Min market cap**, **Initial capital**) and the
+**Costs and taxes** (trading cost, taxable account, the three rates, *Sell only after a
+full year* — see [Trading costs and taxes](#trading-costs-and-taxes)); hit **Run backtest**.
 
 Two benchmarks: **SPY**, and the **universe** — every stock the screen ranked on each
 rebalance date, equal-weighted, which is what picking at random from the same candidates
@@ -288,8 +362,11 @@ would have returned. The universe can only hold today's survivors too, so the ga
 between it and the strategy is the honest measure of the ranking; the gap to SPY has the
 survivorship bias baked in.
 
-Body: equity curve vs SPY and the universe (log toggle), tiles (strategy / universe / SPY
-CAGR, max drawdown, Sharpe), full stats table, a **survivorship-bias callout**, per-period
+Body: equity curve vs SPY and the universe, plus the strategy before costs and taxes
+(log toggle), tiles (strategy / universe / SPY CAGR after costs and taxes, max drawdown,
+Sharpe), full stats table, **What trading and taxes took** (each portfolio's CAGR before
+and after, costs and taxes a year, the CAGR if sold at the end, turnover and the share of
+gains taxed short-term), a **survivorship-bias callout**, per-period
 excess returns against either benchmark, **Does the rebalance month matter?** (the same
 strategy run once per month — with a dozen annual rebalances, the month alone can decide
 whether a screen beats its universe), the per-period summary, a holdings expander (every
@@ -302,7 +379,7 @@ window of each chosen length — every 3-year and every 5-year stretch of the pr
 history, say, starting a year apart — and asks how often the strategy beat its universe
 and SPY. Sidebar: the strategy as on the Backtest page, plus **Window lengths**, **Step
 between window starts** and an optional **Earliest start / Latest end** (blank = all the
-price history). Body: a summary per window length (median, worst and best CAGR; the
+price history), and the same **Costs and taxes**. Body: a summary per window length (median, worst and best CAGR; the
 average gap to the universe and to SPY, and how often each was beaten; drawdown and
 Sharpe), a box plot of each window's gap to the universe, every window + CSV, and a
 warnings expander. Also on the CLI as `lti rolling-backtest`. Windows of one length
@@ -369,7 +446,9 @@ it in industries in decline, so the portfolio rides one theme. The signals are r
 the market; a concentrated screen on them isn't a way to collect them. Caveats: two
 seven-year halves, a survivor-only universe (which flatters distressed stocks and so
 works against Altman Z and quality in the first half), and published factors typically
-lose much of their edge after publication.
+lose much of their edge after publication. Two later changes are held off so these numbers
+stay reproducible: the study measures free cash flow with stock-based pay still in it, and
+its backtests are gross of trading costs.
 
 ### 🔬 Stock detail — one company over time
 Sidebar: **Ticker** (matches the primary symbol *and* the full `tickers_all` list, so
@@ -378,7 +457,7 @@ book value**.
 Body: eight tabs — **Price** (adjusted close with filing-date markers), **Income**
 (revenue → net income bars + EPS), **Margins & returns** (gross / net / FCF margin, ROE),
 **Balance sheet** (assets / liabilities / equity + debt-to-equity), **Cash flow**
-(CFO / capex / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
+(CFO / capex / stock comp / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
 **Fair value** (intrinsic-value models, below, on normalized or latest-year earnings, with
 a per-company 5-year CAGR growth input and adjustable discount rate / terminal growth /
 DCF window), and **Raw data** (the annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and book
@@ -473,7 +552,7 @@ value can be checked against the numbers that produced it.
 | input | `basis="normalized"` (default) | `basis="latest"` |
 | --- | --- | --- |
 | EPS | median of the last 5 years' EPS (`eps_norm`) | the latest 10-K's EPS |
-| FCF per share | median 5-year FCF ÷ today's share count | (CFO − capex) ÷ shares, latest 10-K |
+| FCF per share | median 5-year FCF ÷ today's share count | (CFO − capex − stock comp) ÷ shares, latest 10-K |
 | book value per share | equity ÷ shares outstanding | same |
 | dividend | last 12 months actually paid (`dps_ttm`), else the cash-flow tag | same |
 | growth `g` | 5-year revenue CAGR (`revenue_cagr`) | one-year EPS change, else revenue's |
@@ -605,6 +684,7 @@ src/lti/
   pit.py           point-in-time snapshots: split-correct, operating companies, priced
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine, universe benchmark, rebalance-month spread
+  frictions.py     trading costs and taxes: a portfolio as tax lots, rebalanced and marked forward
   rolling.py       reruns the backtest over every N-year window in the price history
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard
@@ -645,7 +725,8 @@ tests/             pure-logic unit tests (no network / SEC data)
   sets it equal to revenue whenever it can't find a cost-of-revenue line, which
   is ~27% of $1B+ revenue filings — Chevron, GM, JPMorgan and Berkshire all come
   through at a 100% gross margin. Don't screen on it without checking.
-- No transaction costs, slippage or taxes.
+- Trading costs are one flat rate per dollar traded, not a spread per stock, and don't
+  grow with the size of the order; taxes are federal-style, with no state tax.
 - Normalized earnings assume the last five years are a fair guide: a business in lasting
   decline, or a cycle longer than five years, still fools them.
 - Survivorship bias (see above) — a proper point-in-time delisting map needs paid data.

@@ -16,7 +16,7 @@ from lti import metrics as metrics_mod, pit
 # annual line items worth charting, in statement order
 INCOME_ITEMS = ["revenues", "gross_profit", "operating_income", "net_income"]
 BALANCE_ITEMS = ["assets", "liabilities", "equity"]
-CASHFLOW_ITEMS = ["cfo", "capex", "free_cash_flow"]
+CASHFLOW_ITEMS = ["cfo", "capex", "stock_comp", "free_cash_flow"]
 MARGIN_METRICS = ["gross_margin", "net_margin", "fcf_margin", "roe"]
 
 

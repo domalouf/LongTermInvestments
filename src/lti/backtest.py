@@ -11,6 +11,13 @@ rebalance. Two benchmarks:
   candidates would have returned. It carries the same survivorship bias as the
   picks (both can only hold companies that still exist), so the gap between
   them measures the ranking itself; the gap to SPY has the bias baked in.
+
+All three are run twice: gross, and as a :class:`lti.frictions.Book` that pays
+``cost_bps`` on every trade and, with ``tax`` set, the tax on dividends and on
+the gains each sale realizes. The reported curves and statistics are the net
+ones; the gross CAGRs sit beside them as ``*_cagr_gross``. The universe pays the
+same frictions on its own, smaller, turnover, so the gap to it is what the
+ranking adds after paying for the trading it takes.
 """
 
 from __future__ import annotations
@@ -23,7 +30,8 @@ import numpy as np
 import pandas as pd
 
 from lti import metrics, pit, prices as prices_mod, ranking
-from lti.performance import summarize
+from lti.frictions import DEFAULT_COST_BPS, Book, TaxRates, Trade
+from lti.performance import cagr, summarize
 from lti.ranking import ScreenSpec
 
 LOGGER = logging.getLogger(__name__)
@@ -43,23 +51,41 @@ class BacktestConfig:
     initial_capital: float = 100_000.0
     market_cap_min: float = 500_000_000.0
     operating_only: bool = True
+    # what trading and taxes take (lti.frictions): every trade pays cost_bps of
+    # its value, one way; tax=None is a tax-free account (an IRA, a 401(k))
+    cost_bps: float = DEFAULT_COST_BPS
+    tax: TaxRates | None = None
+    # rebalance no sooner than a year and a day after the last one, so that
+    # every sale is a long-term gain — the calendar date lands on or just short
+    # of the year in most years, which taxes each year's gains as short-term
+    hold_past_one_year: bool = False
+
+    @property
+    def has_frictions(self) -> bool:
+        return self.cost_bps > 0 or self.tax is not None
 
 
 @dataclass
 class BacktestResult:
-    equity_curve: pd.Series
+    equity_curve: pd.Series  # after costs and taxes, when the config has them
     benchmark_curve: pd.Series
     universe_curve: pd.Series
     holdings: pd.DataFrame
     period_summary: pd.DataFrame
     stats: dict
     warnings: list[str] = field(default_factory=list)
+    equity_curve_gross: pd.Series | None = None  # the strategy before costs and taxes
 
 
-def _rebalance_dates(trading_days: pd.DatetimeIndex, start: pd.Timestamp, end: pd.Timestamp, month: int) -> list[pd.Timestamp]:
-    dates = []
+def _rebalance_dates(
+    trading_days: pd.DatetimeIndex, start: pd.Timestamp, end: pd.Timestamp, month: int, hold_past_one_year: bool = False
+) -> list[pd.Timestamp]:
+    dates: list[pd.Timestamp] = []
     for year in range(start.year, end.year + 1):
         target = pd.Timestamp(year=year, month=month, day=1)
+        if hold_past_one_year and dates:
+            # a sale counts as long-term from the day after the purchase's anniversary
+            target = max(target, dates[-1] + pd.DateOffset(years=1) + pd.Timedelta(days=1))
         pos = trading_days.searchsorted(target)
         if pos < len(trading_days):
             d = trading_days[pos]
@@ -91,6 +117,34 @@ def _growth_paths(panel: pd.DataFrame, tickers: list[str], rd: pd.Timestamp, gri
     return out
 
 
+def _price_growth(close: pd.DataFrame, tickers: list[str], rd: pd.Timestamp, nrd: pd.Timestamp) -> pd.Series:
+    """Growth of $1 in each ticker's split-adjusted price alone, ``rd`` to ``nrd``:
+    the total return less the dividends. A ticker without a split-adjusted close
+    is left out, and :meth:`lti.frictions.Book.grow` books it no dividend."""
+    cols = [t for t in dict.fromkeys(tickers) if t in close.columns]
+    return 1.0 + prices_mod.forward_returns(close, cols, rd, nrd)
+
+
+def _hold(
+    book: Book, paths: pd.DataFrame, weights: pd.Series, price_growth: pd.Series, rd: pd.Timestamp
+) -> tuple[pd.Series, Trade, float]:
+    """Rebalance ``book`` into ``weights`` on ``rd`` and carry it along ``paths``
+    (:func:`_growth_paths`) to the next rebalance.
+
+    Returns its value on the grid — the last point after the tax on the period's
+    dividends — the trade, and that dividend tax.
+    """
+    trade = book.rebalance(rd, weights)
+    pos = book.positions()
+    values = paths.reindex(columns=pos.index, fill_value=1.0).to_numpy() @ pos.to_numpy() + book.cash
+    dividend_tax = book.grow(paths.iloc[-1], price_growth)
+    values[-1] = book.value
+    return pd.Series(values, index=paths.index), trade, dividend_tax
+
+
+LEGS = ("port", "univ", "bench")  # the strategy, its universe, the benchmark
+
+
 def run_backtest(
     cfg: BacktestConfig,
     fund: pd.DataFrame | None = None,
@@ -116,7 +170,7 @@ def run_backtest(
     end = pd.Timestamp(cfg.end) if cfg.end else trading_days[-1]
     end = min(end, trading_days[-1])
 
-    rebal_dates = _rebalance_dates(trading_days, start, end, cfg.rebalance_month)
+    rebal_dates = _rebalance_dates(trading_days, start, end, cfg.rebalance_month, cfg.hold_past_one_year)
     if len(rebal_dates) < 2:
         raise RuntimeError("need at least two rebalance dates in the date range")
 
@@ -133,6 +187,13 @@ def run_backtest(
     univ_segments = [pd.Series({rebal_dates[0]: univ_value})]
     holdings_rows: list[dict] = []
     period_rows: list[dict] = []
+    # the same three portfolios after costs and taxes
+    books = {leg: Book(cfg.initial_capital, cfg.cost_bps, cfg.tax) for leg in LEGS}
+    net_segments = {leg: [pd.Series({rebal_dates[0]: cfg.initial_capital})] for leg in LEGS}
+    paid: dict[str, list[tuple[float, float]]] = {leg: [] for leg in LEGS}  # (costs, taxes) ÷ value, per period
+    realized: list[tuple[float, float]] = []  # the strategy's net gains by term, $, per rebalance
+    if cfg.tax is not None and bench not in px.close.columns:
+        warnings.append(f"{bench} has no split-adjusted close, so its dividends go untaxed")
 
     for rd, nrd in zip(rebal_dates[:-1], rebal_dates[1:]):
         snap = pit.priced_snapshot(fund, rd, px, operating_only=cfg.operating_only, with_history=with_history)
@@ -156,7 +217,8 @@ def run_backtest(
         paths = _growth_paths(px.adj, universe, rd, grid)
         port_path = port_value * paths[picks].mean(axis=1)
         univ_path = univ_value * paths.mean(axis=1)
-        bench_path = bench_value * _growth_paths(px.adj, [bench], rd, grid)[bench]
+        bench_paths = _growth_paths(px.adj, [bench], rd, grid)
+        bench_path = bench_value * bench_paths[bench]
 
         port_ret = float(port_path.iloc[-1] / port_value - 1)
         univ_ret = float(univ_path.iloc[-1] / univ_value - 1)
@@ -194,6 +256,27 @@ def run_backtest(
         bench_value = float(bench_path.iloc[-1])
         univ_value = float(univ_path.iloc[-1])
 
+        price_growth = _price_growth(px.close, [*universe, bench], rd, nrd)
+        legs = {
+            "port": (paths, pd.Series(1.0, index=picks)),
+            "univ": (paths, pd.Series(1.0, index=universe)),
+            "bench": (bench_paths, pd.Series(1.0, index=[bench])),
+        }
+        net_ret: dict[str, float] = {}
+        trades: dict[str, Trade] = {}
+        for leg, (leg_paths, weights) in legs.items():
+            segment, trade, dividend_tax = _hold(books[leg], leg_paths, weights, price_growth, rd)
+            net_segments[leg].append(segment)
+            net_ret[leg] = float(segment.iloc[-1] / trade.value_before - 1)
+            paid[leg].append((trade.cost / trade.value_before, (trade.tax + dividend_tax) / trade.value_before))
+            trades[leg] = trade
+        port_ret_gross = port_ret
+        if cfg.has_frictions:
+            port_ret, univ_ret, bench_ret = net_ret["port"], net_ret["univ"], net_ret["bench"]
+        t = trades["port"]
+        port_costs, port_taxes = paid["port"][-1]
+        realized.append((t.short_term_gain, t.long_term_gain))
+
         period_rows.append(
             {
                 "rebalance_date": rd,
@@ -206,6 +289,14 @@ def run_backtest(
                 "bench_return": bench_ret,
                 "excess_return": port_ret - (bench_ret or 0.0),
                 "excess_vs_univ": port_ret - univ_ret,
+                "port_return_gross": port_ret_gross,
+                # what the strategy traded on this date and paid over the period, as
+                # shares of what it was worth going in; gains are net of losses by term
+                "turnover": t.turnover,
+                "costs": port_costs,
+                "taxes": port_taxes,
+                "gains_short_term": t.short_term_gain / t.value_before,
+                "gains_long_term": t.long_term_gain / t.value_before,
             }
         )
 
@@ -213,9 +304,10 @@ def run_backtest(
         curve = pd.concat(segments).sort_index()
         return curve[~curve.index.duplicated(keep="last")]
 
-    equity_curve = _curve(equity_segments)
-    benchmark_curve = _curve(bench_segments)
-    universe_curve = _curve(univ_segments)
+    gross = {"port": _curve(equity_segments), "univ": _curve(univ_segments), "bench": _curve(bench_segments)}
+    # without frictions the books only restate the gross curves, to rounding
+    curves = {leg: _curve(net_segments[leg]) for leg in LEGS} if cfg.has_frictions else gross
+    equity_curve, universe_curve, benchmark_curve = curves["port"], curves["univ"], curves["bench"]
 
     holdings = pd.DataFrame(holdings_rows)
     period_summary = pd.DataFrame(period_rows)
@@ -223,6 +315,7 @@ def run_backtest(
     if not period_summary.empty:
         stats["periods_beat_univ"] = float((period_summary["excess_vs_univ"] > 0).mean())
         stats["periods_beat_bench"] = float((period_summary["excess_return"] > 0).mean())
+    stats.update(_friction_stats(cfg, gross, curves, books, paid, realized))
 
     if unpriced:
         warnings.insert(
@@ -233,8 +326,45 @@ def run_backtest(
     # de-duplicate warnings, keep order
     warnings = list(dict.fromkeys(warnings))
     return BacktestResult(
-        equity_curve, benchmark_curve, universe_curve, holdings, period_summary, stats, warnings
+        equity_curve, benchmark_curve, universe_curve, holdings, period_summary, stats, warnings, gross["port"]
     )
+
+
+def _friction_stats(
+    cfg: BacktestConfig,
+    gross: dict[str, pd.Series],
+    curves: dict[str, pd.Series],
+    books: dict[str, Book],
+    paid: dict[str, list[tuple[float, float]]],
+    realized: list[tuple[float, float]],
+) -> dict:
+    """What trading and taxes took from each leg — emitted for every run, frictionless or not.
+
+    ``*_cagr_gross`` is the CAGR before them; ``*_costs_pa`` / ``*_taxes_pa`` the
+    average paid per (roughly yearly) period, as a share of the value going in;
+    ``*_cagr_liquidated`` the CAGR had everything been sold on the last day,
+    paying the cost and the tax on every gain still unrealized — the fair
+    comparison with buy-and-hold SPY, whose gains are otherwise never taxed.
+    ``port_short_term_share`` is the share of the strategy's realized gains
+    taxed as short-term.
+    """
+    out: dict = {}
+    for leg in LEGS:
+        curve = curves[leg]
+        out[f"{leg}_cagr_gross"] = cagr(gross[leg])
+        costs, taxes = zip(*paid[leg]) if paid[leg] else ((np.nan,), (np.nan,))
+        out[f"{leg}_costs_pa"] = float(np.mean(costs))
+        out[f"{leg}_taxes_pa"] = float(np.mean(taxes))
+        if cfg.has_frictions and len(curve) > 1:
+            sold = curve.copy()
+            sold.iloc[-1] = books[leg].liquidation_value(curve.index[-1])
+            out[f"{leg}_cagr_liquidated"] = cagr(sold)
+        else:
+            out[f"{leg}_cagr_liquidated"] = cagr(curve)
+    short = sum(max(s, 0.0) for s, _ in realized)
+    long = sum(max(lg, 0.0) for _, lg in realized)
+    out["port_short_term_share"] = float(short / (short + long)) if short + long > 0 else np.nan
+    return out
 
 
 def rebalance_month_spread(

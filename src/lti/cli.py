@@ -91,8 +91,40 @@ def cmd_progress(args: argparse.Namespace) -> None:
     print(progress.render())
 
 
+def _friction_kwargs(args: argparse.Namespace) -> dict:
+    """The cost and tax flags, as BacktestConfig / RollingConfig fields."""
+    from lti.frictions import TaxRates
+
+    tax = None
+    if args.taxable:
+        tax = TaxRates(short_term=args.short_term_tax, long_term=args.long_term_tax, dividends=args.dividend_tax)
+    return dict(cost_bps=args.cost_bps, tax=tax, hold_past_one_year=args.hold_past_year)
+
+
+def _add_friction_args(p: argparse.ArgumentParser) -> None:
+    from lti.frictions import DEFAULT_COST_BPS, TaxRates
+
+    rates = TaxRates()
+    p.add_argument(
+        "--cost-bps", type=float, default=DEFAULT_COST_BPS,
+        help=f"trading cost per dollar traded, one way, in basis points (default {DEFAULT_COST_BPS:g}; 0 = gross)",
+    )
+    p.add_argument("--taxable", action="store_true", help="a taxable account: tax dividends and realized gains")
+    p.add_argument("--short-term-tax", type=float, default=rates.short_term,
+                   help=f"rate on gains held a year or less (default {rates.short_term:g})")
+    p.add_argument("--long-term-tax", type=float, default=rates.long_term,
+                   help=f"rate on gains held longer (default {rates.long_term:g})")
+    p.add_argument("--dividend-tax", type=float, default=rates.dividends,
+                   help=f"rate on dividends (default {rates.dividends:g})")
+    p.add_argument(
+        "--hold-past-year", action="store_true",
+        help="rebalance no sooner than a year and a day after the last time, so every gain is long-term",
+    )
+
+
 def _screen_from_json(path: str):
     from lti.backtest import BacktestConfig
+    from lti.frictions import DEFAULT_COST_BPS, TaxRates
     from lti.ranking import ScreenSpec
 
     raw = json.load(open(path))
@@ -113,6 +145,9 @@ def _screen_from_json(path: str):
         initial_capital=raw.get("initial_capital", 100_000.0),
         market_cap_min=raw.get("market_cap_min", 50_000_000.0),
         operating_only=raw.get("operating_only", True),
+        cost_bps=raw.get("cost_bps", DEFAULT_COST_BPS),
+        tax=TaxRates(**raw["tax"]) if raw.get("tax") else None,
+        hold_past_one_year=raw.get("hold_past_one_year", False),
     )
 
 
@@ -138,6 +173,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             start=args.start,
             end=args.end,
             rebalance_month=args.rebalance_month,
+            **_friction_kwargs(args),
         )
     if args.all_months:
         spread = rebalance_month_spread(cfg)
@@ -170,6 +206,7 @@ def cmd_rolling_backtest(args: argparse.Namespace) -> None:
         start=args.start,
         end=args.end,
         rebalance_month=args.rebalance_month,
+        **_friction_kwargs(args),
     )
     try:
         result = run_rolling_backtest(cfg)
@@ -503,6 +540,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bt.add_argument("--exclude-financials", action="store_true", help="drop SIC 6000-6799")
     bt.add_argument("--exclude-utilities", action="store_true", help="drop SIC 4900-4999")
+    _add_friction_args(bt)
     bt.set_defaults(func=cmd_backtest)
 
     rb = sub.add_parser(
@@ -516,6 +554,7 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--start", default=None, help="default: earliest available price date")
     rb.add_argument("--end", default=None, help="default: latest available price date")
     rb.add_argument("--rebalance-month", type=int, default=4, help="April by default, as for `lti backtest`")
+    _add_friction_args(rb)
     rb.set_defaults(func=cmd_rolling_backtest)
 
     fi = sub.add_parser("factor-ic", help="cross-sectional IC of each metric vs forward return")

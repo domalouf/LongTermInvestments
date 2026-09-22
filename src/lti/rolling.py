@@ -23,6 +23,7 @@ import pandas as pd
 
 from lti import prices as prices_mod
 from lti.backtest import BacktestConfig, run_backtest
+from lti.frictions import DEFAULT_COST_BPS, TaxRates
 from lti.ranking import ScreenSpec
 
 LOGGER = logging.getLogger(__name__)
@@ -40,6 +41,10 @@ class RollingConfig:
     rf_annual: float = 0.0
     initial_capital: float = 100_000.0
     market_cap_min: float = 500_000_000.0
+    # as BacktestConfig: what trading and taxes take
+    cost_bps: float = DEFAULT_COST_BPS
+    tax: TaxRates | None = None
+    hold_past_one_year: bool = False
 
 
 @dataclass
@@ -108,6 +113,9 @@ def run_rolling_backtest(
                 rf_annual=cfg.rf_annual,
                 initial_capital=cfg.initial_capital,
                 market_cap_min=cfg.market_cap_min,
+                cost_bps=cfg.cost_bps,
+                tax=cfg.tax,
+                hold_past_one_year=cfg.hold_past_one_year,
             )
             try:
                 result = run_backtest(bt_cfg, fund=fund, px=px)
@@ -125,6 +133,7 @@ def run_rolling_backtest(
                     "start": w_start,
                     "end": w_end,
                     "port_cagr": port_cagr,
+                    "port_cagr_gross": stats.get("port_cagr_gross", np.nan),
                     "univ_cagr": univ_cagr,
                     "bench_cagr": bench_cagr,
                     "excess_cagr_vs_univ": port_cagr - univ_cagr,

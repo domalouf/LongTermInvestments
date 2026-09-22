@@ -15,7 +15,8 @@ from lti.ranking import ScreenSpec
 theme.header(
     "🧪 Strategy backtest",
     "Buy the top N of a screen, equal-weighted, rebalance once a year, and compare against "
-    "SPY and against an equal-weighted basket of <i>every</i> stock the screen ranked.",
+    "SPY and against an equal-weighted basket of <i>every</i> stock the screen ranked — all "
+    "three after trading costs, and after tax if the account is taxable.",
     "The basket is the fair yardstick: it can only hold today's survivors too, so the gap "
     "between it and the strategy is what the ranking itself added. The gap to SPY also "
     "contains the survivorship bias — see the warning below.",
@@ -40,6 +41,7 @@ def _config(cfg_key: str) -> BacktestConfig:
         rebalance_month=raw["rebalance_month"],
         market_cap_min=raw["market_cap_min"],
         initial_capital=raw["initial_capital"],
+        **widgets.friction_kwargs(raw["frictions"]),
     )
 
 
@@ -49,6 +51,7 @@ def _run(cfg_key: str):
     return (
         result.equity_curve, result.benchmark_curve, result.universe_curve,
         result.holdings, result.period_summary, result.stats, result.warnings,
+        result.equity_curve_gross,
     )
 
 
@@ -78,6 +81,7 @@ with st.sidebar:
     capital = st.number_input("Initial capital ($)", value=100_000.0, step=10_000.0)
     excl_fin = st.checkbox("Exclude financials", value=magic)
     excl_util = st.checkbox("Exclude utilities", value=magic)
+    fric = widgets.frictions()
     go_btn = st.button("Run backtest", type="primary")
 
 if not chosen:
@@ -95,13 +99,14 @@ cfg_key = json.dumps(
         "initial_capital": capital,
         "filters": {"exclude_financials": excl_fin, "exclude_utilities": excl_util},
         "min_coverage": coverage,
+        "frictions": fric,
     }
 )
 
 widgets.run_gate("backtest", go_btn, cfg_key, "Set the strategy in the sidebar and hit **Run backtest**.")
 
 try:
-    equity, bench, universe, holdings, period_summary, stats, warnings = _run(cfg_key)
+    equity, bench, universe, holdings, period_summary, stats, warnings, equity_gross = _run(cfg_key)
 except RuntimeError as exc:
     st.error(str(exc))
     st.stop()
@@ -132,6 +137,14 @@ c4.metric("Max drawdown", f"{stats['port_max_drawdown']:.1%}",
           delta_color="inverse")
 c5.metric("Sharpe", f"{stats['port_sharpe']:.2f}", f"SPY {stats['bench_sharpe']:.2f}")
 
+has_frictions = fric["cost_bps"] > 0 or fric["tax"] is not None
+if has_frictions:
+    theme.note(
+        f"All three after {fric['cost_bps']:g} bps a trade{' and taxes' if fric['tax'] else ''}. "
+        f"Before: strategy {stats['port_cagr_gross']:.1%}, universe {stats['univ_cagr_gross']:.1%}, "
+        f"SPY {stats['bench_cagr_gross']:.1%} — see <i>What trading and taxes took</i> below."
+    )
+
 st.header("Growth of the initial stake")
 log_scale = st.toggle(
     "Log scale", value=False,
@@ -139,15 +152,18 @@ log_scale = st.toggle(
          "which is the honest way to compare curves over a long window.",
 )
 fig = go.Figure()
-for curve, name, color in [
-    (bench, "SPY", theme.MUTED),
-    (universe, "Universe (equal weight)", theme.ORANGE),
-    (equity, "Strategy", theme.BLUE),
-]:
+lines = [
+    (bench, "SPY", theme.MUTED, "solid"),
+    (universe, "Universe (equal weight)", theme.ORANGE, "solid"),
+    (equity, "Strategy", theme.BLUE, "solid"),
+]
+if has_frictions:
+    lines.append((equity_gross, "Strategy before costs & taxes", theme.BLUE, "dot"))
+for curve, name, color, dash in lines:
     fig.add_trace(
         go.Scatter(
             x=curve.index, y=curve.values, name=name, mode="lines",
-            line=dict(width=2, color=color),
+            line=dict(width=2 if dash == "solid" else 1.5, color=color, dash=dash),
             hovertemplate=f"{name} $%{{y:,.0f}}<extra></extra>",
         )
     )
@@ -163,9 +179,9 @@ with st.expander("All statistics"):
     def _fmt(k: str, v) -> str:
         if isinstance(v, pd.Timestamp):
             return str(v.date())
-        if not isinstance(v, (int, float)) or v != v:
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
             return str(v)
-        if any(t in k for t in ("cagr", "return", "drawdown", "vol", "rate", "turnover", "beat")):
+        if any(t in k for t in ("cagr", "return", "drawdown", "vol", "rate", "turnover", "beat", "_pa", "share")):
             return f"{v:.2%}"
         return f"{v:,.3f}"
 
@@ -174,6 +190,71 @@ with st.expander("All statistics"):
         hide_index=True,
         width="stretch",
     )
+
+if has_frictions:
+    st.header("What trading and taxes took")
+    taxed = fric["tax"] is not None
+    table = pd.DataFrame(
+        [
+            {
+                "portfolio": name,
+                "before": stats[f"{leg}_cagr_gross"],
+                "after": stats[f"{leg}_cagr"],
+                "lost": stats[f"{leg}_cagr"] - stats[f"{leg}_cagr_gross"],
+                "costs": stats[f"{leg}_costs_pa"],
+                "taxes": stats[f"{leg}_taxes_pa"],
+                "sold": stats[f"{leg}_cagr_liquidated"],
+            }
+            for leg, name in [("port", "Strategy"), ("univ", "Universe"), ("bench", "SPY")]
+        ]
+    )
+    if not taxed:
+        table = table.drop(columns=["taxes", "sold"])
+
+    def pct(label: str, **kw):
+        return st.column_config.NumberColumn(label, format="percent", **kw)
+
+    st.dataframe(
+        table, hide_index=True, width="stretch",
+        column_config={
+            "portfolio": st.column_config.TextColumn(""),
+            "before": pct("CAGR before"),
+            "after": pct("CAGR after"),
+            "lost": pct("Lost a year"),
+            "costs": pct("Costs a year", help="Paid to trade at each rebalance, as a share of the portfolio."),
+            "taxes": pct("Taxes a year", help="On dividends and realized gains, as a share of the portfolio."),
+            "sold": pct("Sold at the end", help="The CAGR had everything been sold on the last day, "
+                                                "paying the tax on gains not yet realized."),
+        },
+    )
+    turnover = period_summary["turnover"].iloc[1:].median() if len(period_summary) > 1 else float("nan")
+    notes = []
+    if turnover == turnover:
+        notes.append(
+            f"A typical rebalance replaced <b>{turnover:.0%}</b> of the strategy (one-way turnover), each "
+            f"dollar of it paying {fric['cost_bps']:g} bps to sell and again to buy. The universe pays the "
+            "same rate on its own, smaller, turnover, so the gap to it is what the ranking adds after "
+            "paying for the trading it takes."
+        )
+    if taxed:
+        share = stats["port_short_term_share"]
+        rates = fric["tax"]
+        if share == share:
+            line = (
+                f"<b>{share:.0%}</b> of the strategy's realized gains were short-term, taxed at "
+                f"{rates['short_term']:.0%} rather than {rates['long_term']:.0%}."
+            )
+            if not fric["hold_past_one_year"] and share > 0:
+                line += (
+                    " The rebalance lands on or just short of the one-year mark in most years — tick "
+                    "<i>Sell only after a full year</i> to see what waiting a few days longer is worth."
+                )
+            notes.append(line)
+        notes.append(
+            "SPY is bought once and never sold, so apart from its dividends none of its gain is taxed "
+            "until you sell. <i>Sold at the end</i> puts all three on the same footing."
+        )
+    theme.note(" ".join(notes))
 
 n_delisted = int(period_summary["n_delisted"].sum()) if not period_summary.empty else 0
 st.warning(

@@ -354,3 +354,59 @@ def test_performance_helpers():
     assert mdd == pytest.approx(-90 / 110 + 1 - 1, rel=1e-6) or mdd < 0
     assert peak < trough
     assert np.isfinite(sharpe(curve))
+
+
+def _frictions_cfg(**kw) -> BacktestConfig:
+    return BacktestConfig(
+        screen=ScreenSpec(metrics=["pe", "debt_to_equity"], top_n=3),
+        start="2012-01-01", end="2021-01-01", market_cap_min=0.0, **kw,
+    )
+
+
+def test_a_frictionless_backtest_is_the_gross_one(fund, px):
+    r = run_backtest(_frictions_cfg(cost_bps=0.0), fund=fund, px=px)
+    assert r.equity_curve.equals(r.equity_curve_gross)
+    for leg in ("port", "univ", "bench"):
+        assert r.stats[f"{leg}_cagr"] == r.stats[f"{leg}_cagr_gross"] == r.stats[f"{leg}_cagr_liquidated"]
+        assert r.stats[f"{leg}_costs_pa"] == r.stats[f"{leg}_taxes_pa"] == 0.0
+    assert (r.period_summary["port_return"] == r.period_summary["port_return_gross"]).all()
+
+
+def test_costs_and_taxes_come_out_of_all_three(fund, panel):
+    from lti.frictions import TaxRates
+
+    # a 2%-a-year dividend: the price rises more slowly than the total return
+    close = panel.mul(np.exp(-0.02 / 252 * np.arange(len(panel))), axis=0)
+    px = PriceData(adj=panel, close=close, splits=empty_splits())
+    costs = run_backtest(_frictions_cfg(cost_bps=20.0), fund=fund, px=px)
+    taxed = run_backtest(_frictions_cfg(cost_bps=20.0, tax=TaxRates()), fund=fund, px=px)
+
+    for leg in ("port", "univ", "bench"):
+        assert costs.stats[f"{leg}_cagr"] < costs.stats[f"{leg}_cagr_gross"]
+        assert costs.stats[f"{leg}_costs_pa"] > 0 and costs.stats[f"{leg}_taxes_pa"] == 0.0
+        assert taxed.stats[f"{leg}_cagr"] < costs.stats[f"{leg}_cagr"]
+        assert taxed.stats[f"{leg}_taxes_pa"] > 0
+        # selling at the end taxes the gains still unrealized
+        assert taxed.stats[f"{leg}_cagr_liquidated"] < taxed.stats[f"{leg}_cagr"]
+    assert taxed.stats["port_cagr_gross"] == pytest.approx(costs.stats["port_cagr_gross"])
+    assert taxed.equity_curve.iloc[0] == taxed.equity_curve_gross.iloc[0] == 100_000.0
+    # each period's net return is what the curve did between rebalances
+    ps = taxed.period_summary
+    curve = taxed.equity_curve
+    assert ps.loc[1, "port_return"] == pytest.approx(curve[ps.loc[1, "exit_date"]] / curve[ps.loc[1, "rebalance_date"]] - 1)
+    assert (ps["costs"] > 0).all() and (ps["taxes"] > 0).all()
+    assert ps.loc[0, "turnover"] == pytest.approx(0.5, abs=0.01)  # the first date only buys
+
+
+def test_holding_past_a_year_makes_every_gain_long_term(fund, px):
+    from lti.frictions import TaxRates
+
+    calendar = run_backtest(_frictions_cfg(tax=TaxRates()), fund=fund, px=px)
+    patient = run_backtest(_frictions_cfg(tax=TaxRates(), hold_past_one_year=True), fund=fund, px=px)
+
+    # the first trading day of April falls a year to the day, or less, after the last one in some years
+    assert calendar.stats["port_short_term_share"] > 0
+    assert patient.stats["port_short_term_share"] == 0.0
+    dates = pd.to_datetime(patient.period_summary["rebalance_date"])
+    assert all(b > a + pd.DateOffset(years=1) for a, b in zip(dates[:-1], dates[1:]))
+    assert (dates.dt.month == 4).all()  # it drifts a few days a year, not out of the month

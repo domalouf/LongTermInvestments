@@ -132,7 +132,8 @@ MODEL_DOCS: dict[str, ModelDoc] = {
         ),
         inputs=(
             "free cash flow per share — the normalized median FCF over today's share count, or "
-            "operating cash flow − capex from the latest 10-K — grown at g (clipped to [0, growth_cap]) "
+            "operating cash flow − capex − stock-based pay from the latest 10-K — grown at g (clipped to "
+            "[0, growth_cap]) "
             "for N years, then forever at g_term, all discounted at the required return r."
         ),
         at_defaults=(

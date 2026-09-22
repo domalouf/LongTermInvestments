@@ -208,7 +208,8 @@ with cf_tab:
         _year_bar(annual, stock_mod.CASHFLOW_ITEMS)
         theme.note(
             "<code>cfo</code> operating cash flow · <code>capex</code> capital expenditure "
-            "(as reported) · <code>free_cash_flow</code> = cfo − |capex|."
+            "(as reported) · <code>stock_comp</code> stock-based pay, which cfo adds back as non-cash · "
+            "<code>free_cash_flow</code> = cfo − |capex| − stock_comp: pay in shares is still pay."
         )
 
 with div_tab:

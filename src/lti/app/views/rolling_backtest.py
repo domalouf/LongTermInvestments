@@ -32,6 +32,7 @@ def _run(cfg_key: str):
         end=raw["end"] or None,
         rebalance_month=raw["rebalance_month"],
         market_cap_min=raw["market_cap_min"],
+        **widgets.friction_kwargs(raw["frictions"]),
     )
     result = run_rolling_backtest(cfg)
     return result.windows, result.summary, result.warnings
@@ -50,6 +51,7 @@ with st.sidebar:
         help="April by default, as on the Backtest page: by then calendar-year 10-Ks are in.",
     )
     cap_floor_m = st.number_input("Min market cap ($M)", value=500.0, step=100.0, min_value=0.0)
+    fric = widgets.frictions()
     go_btn = st.button("Run rolling backtest", type="primary")
 
 if not chosen:
@@ -70,6 +72,7 @@ cfg_key = json.dumps(
         "end": end.strip(),
         "rebalance_month": rebal_month,
         "market_cap_min": cap_floor_m * 1e6,
+        "frictions": fric,
     }
 )
 
@@ -82,6 +85,12 @@ except RuntimeError as exc:
     st.stop()
 
 st.header("By window length")
+if fric["cost_bps"] > 0 or fric["tax"] is not None:
+    theme.note(
+        f"Every window after {fric['cost_bps']:g} bps a trade{' and taxes' if fric['tax'] else ''} — the "
+        "strategy, its universe and SPY alike. Each window's CAGR before them is in "
+        "<i>Every window</i>, as <code>port_cagr_gross</code>."
+    )
 st.dataframe(
     summary, hide_index=True, width="stretch",
     column_config={
