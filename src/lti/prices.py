@@ -84,26 +84,21 @@ class PriceData:
         return self.adj.empty
 
 
+class _NoBar:
+    """Stands in for tqdm where it can't be imported, so callers needn't check."""
+
+    def set_postfix_str(self, text: str) -> None: ...
+    def update(self, n: int) -> None: ...
+    def close(self) -> None: ...
+
+
 def _make_bar(total: int, desc: str):
     try:
         from tqdm import tqdm
 
         return tqdm(total=total, desc=desc, unit="tkr", dynamic_ncols=True)
     except Exception:  # noqa: BLE001 - tqdm optional / non-tty
-        return None
-
-
-def _bar_advance(bar, n: int, postfix: str | None = None) -> None:
-    if bar is None:
-        return
-    if postfix:
-        bar.set_postfix_str(postfix)
-    bar.update(n)
-
-
-def _bar_close(bar) -> None:
-    if bar is not None:
-        bar.close()
+        return _NoBar()
 
 
 # --- cache IO --------------------------------------------------------------
@@ -145,11 +140,11 @@ def _save_events(ev: pd.DataFrame, path: Path) -> None:
     _write_parquet(ev, path, index=False)
 
 
-def _load_splits() -> pd.DataFrame:
+def load_splits() -> pd.DataFrame:
     return _load_events(config.get_paths().splits_parquet, "ratio")
 
 
-def _load_dividends() -> pd.DataFrame:
+def load_dividends() -> pd.DataFrame:
     return _load_events(config.get_paths().dividends_parquet, "amount")
 
 
@@ -353,8 +348,8 @@ def fetch_prices(
     paths = config.get_paths()
     adj = _load_panel(paths.adj_close_parquet)
     close = _load_panel(paths.close_parquet)
-    splits = _load_splits()
-    dividends = _load_dividends()
+    splits = load_splits()
+    dividends = load_dividends()
     meta = _load_meta()
 
     done: set[str] = set()
@@ -380,7 +375,7 @@ def fetch_prices(
             LOGGER.warning("prices: batch failed (%s); marking error", exc)
             for t in batch:
                 meta_rows[t] = _meta_missing(t, "error", now)
-            _bar_advance(bar, len(batch))
+            bar.update(len(batch))
             continue
 
         got = _fetched(bars, batch)
@@ -400,11 +395,12 @@ def fetch_prices(
 
         _save_all(adj, close, splits, dividends, meta_rows)
         n_ok = sum(1 for r in meta_rows.values() if r.get("status") == "ok")
-        _bar_advance(bar, len(batch), postfix=f"{n_ok} ok")
+        bar.set_postfix_str(f"{n_ok} ok")
+        bar.update(len(batch))
         if pause and i + batch_size < len(todo):
             time.sleep(pause)
 
-    _bar_close(bar)
+    bar.close()
     return PriceData(adj, close, splits, dividends)
 
 
@@ -456,8 +452,8 @@ def refresh_prices(
     paths = config.get_paths()
     adj = _load_panel(paths.adj_close_parquet)
     close = _load_panel(paths.close_parquet)
-    splits = _load_splits()
-    dividends = _load_dividends()
+    splits = load_splits()
+    dividends = load_dividends()
     meta = _load_meta()
     if adj.empty or close.empty or meta.empty:
         LOGGER.info("prices: nothing to refresh; run `lti fetch-prices` first")
@@ -487,7 +483,7 @@ def refresh_prices(
             bars = _download(batch, start.strftime("%Y-%m-%d"), None)
         except Exception as exc:  # noqa: BLE001 - resumable, skip and move on
             LOGGER.warning("prices: refresh batch failed (%s); skipping", exc)
-            _bar_advance(bar, len(batch))
+            bar.update(len(batch))
             continue
 
         acted = set(bars.splits["ticker"].astype(str)) | set(bars.dividends["ticker"].astype(str))
@@ -499,10 +495,11 @@ def refresh_prices(
                 spliced.append(t)
         win_adj.append(bars.adj[spliced])
         win_close.append(bars.close[spliced])
-        _bar_advance(bar, len(batch), postfix=f"{len(rebased)} re-based")
+        bar.set_postfix_str(f"{len(rebased)} re-based")
+        bar.update(len(batch))
         if pause and i + batch_size < len(cached):
             time.sleep(pause)
-    _bar_close(bar)
+    bar.close()
 
     now = pd.Timestamp.utcnow()
     if win_adj:
@@ -553,14 +550,6 @@ def load_adj_close(tickers: list[str] | None = None) -> pd.DataFrame:
 
 def load_close() -> pd.DataFrame:
     return _load_panel(config.get_paths().close_parquet)
-
-
-def load_splits() -> pd.DataFrame:
-    return _load_splits()
-
-
-def load_dividends() -> pd.DataFrame:
-    return _load_dividends()
 
 
 def load_price_data() -> PriceData:

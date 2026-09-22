@@ -35,14 +35,14 @@ def _count_dirs(path) -> int:
         return 0
 
 
-def _count_processed_quarters() -> tuple[int, int]:
+def _sec_index() -> tuple[int, str | None]:
+    """How many quarter zips are processed, and the latest one's name."""
     try:
         from lti import sec_update
 
-        names = sec_update.all_quarter_zip_names()
-        return len(names), max(len(names), 1)
-    except Exception:  # noqa: BLE001
-        return 0, 1
+        return len(sec_update.all_quarter_zip_names()), sec_update.latest_quarter()
+    except Exception:  # noqa: BLE001 - the index simply may not be built yet
+        return 0, None
 
 
 def collect_stages() -> list[Stage]:
@@ -50,14 +50,7 @@ def collect_stages() -> list[Stage]:
     stages: list[Stage] = []
 
     # 1. SEC raw data + index
-    n_q, _ = _count_processed_quarters()
-    latest = None
-    try:
-        from lti import sec_update
-
-        latest = sec_update.latest_quarter()
-    except Exception:  # noqa: BLE001
-        pass
+    n_q, latest = _sec_index()
     stages.append(
         Stage("SEC data", 1 if n_q else 0, 1, f"{n_q} quarters processed"
               + (f", latest {latest}" if latest else ""))

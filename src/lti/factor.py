@@ -22,11 +22,9 @@ import numpy as np
 import pandas as pd
 
 from lti import metrics, pit, prices as prices_mod, sectors
-from lti.metrics import FUNDAMENTAL_METRICS, HISTORY_METRICS, LOWER_IS_BETTER, PRICE_METRICS, VALUATION_METRICS
+from lti.metrics import ALL_METRICS, LOWER_IS_BETTER  # ALL_METRICS re-exported for the pages
 
 LOGGER = logging.getLogger(__name__)
-
-ALL_METRICS: list[str] = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
 
 
 @dataclass
@@ -137,10 +135,7 @@ def _prepare_snapshot(fund: pd.DataFrame, px: prices_mod.PriceData, asof: pd.Tim
     if cfg.require_positive_eps and "eps" in snap.columns:
         snap = snap[snap["eps"] > 0]
     if cfg.exclude_financials:
-        if "is_financial" in snap.columns:
-            snap = snap[~snap["is_financial"].fillna(False).astype(bool)]
-        if "sic" in snap.columns:
-            snap = snap[~sectors.is_investment_company(snap["sic"])]
+        snap = sectors.drop_financials(snap)
     for name, parts in cfg.composites.items():  # in order, so a composite can build on an earlier one
         snap = snap.assign(**{name: composite_score(snap, parts)})
     return snap

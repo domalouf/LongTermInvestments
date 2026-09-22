@@ -18,6 +18,13 @@ def _setup_logging() -> None:
     )
 
 
+def _print_warnings(warnings: list[str], limit: int = 30) -> None:
+    if warnings:
+        print(f"\n=== warnings ({len(warnings)}) ===")
+        for w in warnings[:limit]:
+            print("  ", w)
+
+
 def cmd_update(args: argparse.Namespace) -> None:
     from lti import sec_update
 
@@ -149,10 +156,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
         print(f"  {k}: {v}")
     print("\n=== period summary ===")
     print(result.period_summary.to_string(index=False))
-    if result.warnings:
-        print(f"\n=== warnings ({len(result.warnings)}) ===")
-        for w in result.warnings[:30]:
-            print("  ", w)
+    _print_warnings(result.warnings)
 
 
 def cmd_rolling_backtest(args: argparse.Namespace) -> None:
@@ -175,10 +179,7 @@ def cmd_rolling_backtest(args: argparse.Namespace) -> None:
     print(result.summary.round(4).to_string(index=False))
     print(f"\n=== per-window detail ({len(result.windows)} windows) ===")
     print(result.windows.round(4).to_string(index=False))
-    if result.warnings:
-        print(f"\n=== warnings ({len(result.warnings)}) ===")
-        for w in result.warnings[:30]:
-            print("  ", w)
+    _print_warnings(result.warnings)
 
 
 def cmd_factor_ic(args: argparse.Namespace) -> None:
@@ -202,10 +203,7 @@ def cmd_factor_ic(args: argparse.Namespace) -> None:
     print(result.summary.round(4).to_string())
     print("\n=== mean forward return by metric quantile (Q1 = lowest value) ===")
     print(result.bucket_returns.round(4).to_string())
-    if result.warnings:
-        print(f"\n=== warnings ({len(result.warnings)}) ===")
-        for w in result.warnings[:30]:
-            print("  ", w)
+    _print_warnings(result.warnings)
 
 
 def cmd_factor_study(args: argparse.Namespace) -> None:
@@ -336,8 +334,9 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
     from lti.valuation import ValuationAssumptions, rank_undervalued
 
     asof = args.asof or pd.Timestamp.today().strftime("%Y-%m-%d")
-    a = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
-    params = {
+    assumptions = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
+    # the screen's arguments double as the metadata the report publishes
+    screen = {
         "asof": asof,
         "top_n": args.top,
         "market_cap_min": args.market_cap_min * 1e6,
@@ -346,21 +345,10 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
         "min_roe": args.min_roe,
         "require_positive_eps": not args.allow_negative_eps,
         "exclude_financials": not args.include_financials,
-        "discount_rate": args.discount_rate,
-        "growth_cap": args.growth_cap,
     }
+    params = {**screen, "discount_rate": args.discount_rate, "growth_cap": args.growth_cap}
     ranked = rank_undervalued(
-        load_fundamentals(),
-        prices.load_price_data(),
-        asof,
-        assumptions=a,
-        market_cap_min=params["market_cap_min"],
-        require_positive_eps=params["require_positive_eps"],
-        min_models=args.min_models,
-        min_profit_years=args.min_profit_years,
-        min_roe=args.min_roe,
-        exclude_financials=params["exclude_financials"],
-        top_n=args.top,
+        load_fundamentals(), prices.load_price_data(), assumptions=assumptions, **screen
     )
 
     if args.out:

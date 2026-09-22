@@ -139,8 +139,7 @@ def operating_mask(snap: pd.DataFrame) -> pd.Series:
     mark-to-market on their holdings as earnings, which sorts them to the top of
     any cheapness ranking at the peak of a gold rally.
     """
-    rev = snap["revenues"] if "revenues" in snap.columns else pd.Series(np.nan, index=snap.index)
-    mask = (rev > 0).fillna(False).astype(bool)
+    mask = (metrics._col(snap, "revenues") > 0).astype(bool)
     if {"sic", "company"} <= set(snap.columns):
         mask &= ~sectors.is_commodity_pool(snap["sic"], snap["company"])
     return mask
@@ -202,7 +201,7 @@ def priced_snapshot(
     if snap.empty:
         return snap
     price = prices_mod.prices_asof(px.close, snap["ticker"], asof)
-    shares = snap["shares_outstanding"] if "shares_outstanding" in snap.columns else pd.Series(np.nan, index=snap.index)
+    shares = metrics._col(snap, "shares_outstanding")
     snap = metrics.add_price_metrics(snap, price=price, market_cap=price * shares)
     # 12-1 momentum (Jegadeesh & Titman): the total return from a year ago to a
     # month ago, skipping the last month's short-term reversal
@@ -217,7 +216,7 @@ def priced_snapshot(
     snap["dps_ttm"] = dps.where(price.notna())  # unpriced means unfetched, not unpaid
     snap["dividend_yield"] = metrics._safe_div(snap["dps_ttm"], price)
     snap["dividend_growth_5y"] = prices_mod.dividend_growth(px.dividends, snap["ticker"], asof)
-    eps = snap["eps"] if "eps" in snap.columns else pd.Series(np.nan, index=snap.index)
+    eps = metrics._col(snap, "eps")
     snap["payout_ratio"] = metrics._safe_div(snap["dps_ttm"], eps.where(eps > 0))
     if with_history:
         from lti import history, valuation  # both build on this module

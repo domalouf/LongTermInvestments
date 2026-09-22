@@ -88,6 +88,21 @@ def is_commodity_pool(sic: pd.Series, company: pd.Series) -> pd.Series:
     return (codes == COMMODITY_POOL_SIC).fillna(False).astype(bool) & named.astype(bool)
 
 
+def drop_financials(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop banks, insurers, REITs — and the BDCs that carry no SIC at all.
+
+    The exclusion every screen that values an operating business wants, in one
+    place. Lenient: a frame carrying neither ``is_financial`` nor ``sic`` comes
+    back untouched. :func:`lti.ranking._drop_sector` is the strict version, which
+    refuses rather than quietly answer a different question than it was asked.
+    """
+    if "is_financial" in df.columns:
+        df = df[~df["is_financial"].fillna(False).astype(bool)]
+    if "sic" in df.columns:  # BDCs and other investment companies carry no SIC
+        df = df[~is_investment_company(df["sic"])]
+    return df
+
+
 def add_sector_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Add ``sector``, ``is_financial`` and ``is_utility`` from an existing ``sic``."""
     if "sic" not in df.columns:

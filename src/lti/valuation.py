@@ -60,7 +60,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from lti.metrics import _safe_div
+from lti.metrics import _col, _safe_div
 
 if TYPE_CHECKING:
     from lti.prices import PriceData
@@ -542,13 +542,11 @@ def add_valuation_models(
 
     shares = df["shares_outstanding"] if "shares_outstanding" in df.columns else None
     eps_col = "eps_norm" if basis == "normalized" else "eps"
-    eps = df[eps_col] if eps_col in df.columns else pd.Series(np.nan, index=df.index)
+    eps = _col(df, eps_col)
 
-    bvps = df["book_value_per_share"] if "book_value_per_share" in df.columns else None
-    if bvps is None and {"equity", "shares_outstanding"} <= set(df.columns):
+    bvps = _col(df, "book_value_per_share")
+    if "book_value_per_share" not in df.columns and {"equity", "shares_outstanding"} <= set(df.columns):
         bvps = _safe_div(df["equity"], df["shares_outstanding"])
-    if bvps is None:
-        bvps = pd.Series(np.nan, index=df.index)
 
     if basis == "normalized":
         fcf_ps = df["fcf_ps_norm"] if "fcf_ps_norm" in df.columns else None
@@ -682,10 +680,7 @@ def rank_undervalued(
     if exclude_financials:
         from lti import sectors
 
-        if "is_financial" in snap.columns:
-            snap = snap[~snap["is_financial"].fillna(False).astype(bool)]
-        if "sic" in snap.columns:  # BDCs and other investment companies carry no SIC
-            snap = snap[~sectors.is_investment_company(snap["sic"])]
+        snap = sectors.drop_financials(snap)
     if min_profit_years is not None and "profit_years" in snap.columns:
         snap = snap[snap["profit_years"] >= min_profit_years]
     if min_roe is not None and "roe" in snap.columns:

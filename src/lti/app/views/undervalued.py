@@ -11,7 +11,7 @@ import streamlit as st
 
 import lti.config as config
 from lti import prices as prices_mod, stock as stock_mod
-from lti.app import theme
+from lti.app import theme, widgets
 from lti.history import HISTORY_YEARS
 from lti.valuation import (
     MIN_MODELS,
@@ -21,8 +21,6 @@ from lti.valuation import (
     explain,
     rank_undervalued,
 )
-
-MODEL_LABELS = {m: doc.label for m, doc in MODEL_DOCS.items()}
 
 theme.header(
     "🎯 Undervalued today",
@@ -38,18 +36,11 @@ theme.header(
 )
 
 
-@st.cache_data(show_spinner=False)
-def _load_fund() -> pd.DataFrame:
-    from lti.fundamentals import load_fundamentals
-
-    return load_fundamentals()
-
-
 @st.cache_data(show_spinner="Valuing the universe…")
 def _rank(key: str) -> pd.DataFrame:
     p = json.loads(key)
     return rank_undervalued(
-        _load_fund(),
+        widgets.fundamentals(),
         prices_mod.load_price_data(),
         p["asof"],
         assumptions=ValuationAssumptions(
@@ -67,11 +58,7 @@ def _rank(key: str) -> pd.DataFrame:
     )
 
 
-try:
-    _load_fund()
-except FileNotFoundError:
-    st.error("No fundamentals table. Run `lti build-fundamentals` first.")
-    st.stop()
+fund = widgets.fundamentals()
 if not config.get_paths().close_parquet.exists():
     st.error("No split-adjusted price cache. Run `lti fetch-prices` first.")
     st.stop()
@@ -314,16 +301,7 @@ with st.expander(f"What each of the {len(MODELS)} equations does — and what it
         "they mostly restate it at different multiples. The DCF runs on cash flow and the dividend "
         "discount on cash actually paid out — those two are the ones that can disagree for a reason."
     )
-    for m in MODELS:
-        doc = MODEL_DOCS[m]
-        st.markdown(f"**{doc.label}** — `{doc.formula}`")
-        st.markdown(
-            f"{doc.idea} It takes {doc.inputs}\n\n"
-            f"- **At the default assumptions:** {doc.at_defaults}\n"
-            f"- **No value when:** {doc.silent}\n"
-            f"- **Where it misleads:** {doc.misleads}"
-        )
-        st.markdown("")
+    widgets.model_notes()
 
 pick = st.selectbox(
     "Company",
@@ -338,7 +316,7 @@ price = float(row["price"])
 left, right = st.columns(2)
 with left:
     st.subheader("Model values")
-    vals = [(MODEL_LABELS.get(m, m), float(row[m])) for m in MODELS if m in row.index and pd.notna(row[m])]
+    vals = [(MODEL_DOCS[m].label, float(row[m])) for m in MODELS if m in row.index and pd.notna(row[m])]
     vals.sort(key=lambda t: t[1])
     if not vals:
         st.info("No model produced a fair value for this company.")
@@ -355,8 +333,7 @@ with left:
                 hovertemplate="%{y}<br>fair value $%{x:,.2f}<extra></extra>",
             )
         )
-        fig3.update_traces(marker_line_width=0, marker_cornerradius=4)
-        fig3.update_layout(bargap=0.42)
+        theme.bar_marks(fig3, color=None, gap=0.42)
         fig3.add_vline(x=price, line_width=1.5, line_color=theme.INK_2)
         fig3.add_annotation(
             x=price, y=1.0, yref="paper", yanchor="bottom", xanchor="left",
@@ -383,7 +360,7 @@ with left:
 
 with right:
     st.subheader("Earnings history")
-    annual = stock_mod.annual_fundamentals(_load_fund(), cik)
+    annual = stock_mod.annual_fundamentals(fund, cik)
     annual = annual[annual["filed"] <= pd.Timestamp(asof)].tail(10)
     if annual.empty or "eps" not in annual.columns or not annual["eps"].notna().any():
         st.info("No EPS history on file.")
@@ -398,8 +375,7 @@ with right:
                 hovertemplate="FY%{x}<br>EPS $%{y:,.2f} (today's share basis)<extra></extra>",
             )
         )
-        fig4.update_traces(marker_line_width=0, marker_cornerradius=3)
-        fig4.update_layout(bargap=0.3)
+        theme.bar_marks(fig4, color=None, radius=3, gap=0.3)
         theme.zero_line(fig4, axis="y")
         if pd.notna(row.get("eps_norm")):
             fig4.add_hline(y=float(row["eps_norm"]), line_width=1.5, line_color=theme.ORANGE)

@@ -7,15 +7,8 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lti import pit, prices as prices_mod, ranking
-from lti.app import theme
-from lti.metrics import (
-    FUNDAMENTAL_METRICS,
-    HISTORY_METRICS,
-    LOWER_IS_BETTER,
-    MAGIC_FORMULA_METRICS,
-    PRICE_METRICS,
-    VALUATION_METRICS,
-)
+from lti.app import theme, widgets
+from lti.metrics import HISTORY_METRICS, LOWER_IS_BETTER, PRICE_METRICS, VALUATION_METRICS
 
 theme.header(
     "🔎 Screener",
@@ -24,26 +17,13 @@ theme.header(
 )
 
 
-@st.cache_data(show_spinner=False)
-def _load_fund() -> pd.DataFrame:
-    from lti.fundamentals import load_fundamentals
-
-    return load_fundamentals()
-
-
-try:
-    fund = _load_fund()
-except FileNotFoundError:
-    st.error("No fundamentals table. Run `lti build-fundamentals` first.")
-    st.stop()
-
+fund = widgets.fundamentals()
 px = prices_mod.load_price_data()
 
 with st.sidebar:
     st.header("Screen")
     asof = st.date_input("As of", value=pd.Timestamp.today().date())
     cap_floor_m = st.number_input("Min market cap ($M)", value=500.0, step=100.0, min_value=0.0)
-    all_metrics = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
     magic = st.checkbox(
         "Greenblatt Magic Formula",
         value=False,
@@ -51,21 +31,7 @@ with st.sidebar:
         "with financials and utilities excluded — the screen from "
         "*The Little Book that Beats the Market*.",
     )
-    chosen = st.multiselect(
-        "Rank by",
-        all_metrics,
-        default=list(MAGIC_FORMULA_METRICS) if magic else ["pe", "debt_to_equity"],
-        disabled=magic,
-    )
-    if magic:
-        chosen = list(MAGIC_FORMULA_METRICS)
-    coverage = 100
-    if len(chosen) > 2:
-        coverage = st.slider(
-            "Rank companies with at least … % of the metrics", 50, 100, 100, step=10,
-            help="100% needs every metric, which shrinks the universe as the list grows. Lower, "
-                 "a company ranks on the average of the metrics it has.",
-        )
+    chosen, coverage = widgets.rank_by(["pe", "debt_to_equity"], magic=magic)
     top_n = st.slider("Top N", 5, 100, 30 if magic else 10)
     require_pos_eps = st.checkbox("Require positive EPS", value=True)
 
@@ -109,7 +75,7 @@ else:
 spec = ranking.ScreenSpec(
     metrics=chosen,
     top_n=top_n,
-    min_coverage=coverage / 100,
+    min_coverage=coverage,
     filters={
         "market_cap_min": cap_floor_m * 1e6 if "market_cap" in snap.columns else None,
         "require_positive_eps": require_pos_eps,

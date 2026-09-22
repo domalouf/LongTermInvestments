@@ -8,15 +8,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from lti.app import theme
+from lti.app import theme, widgets
 from lti.backtest import BacktestConfig, rebalance_month_spread, run_backtest
-from lti.metrics import (
-    FUNDAMENTAL_METRICS,
-    HISTORY_METRICS,
-    MAGIC_FORMULA_METRICS,
-    PRICE_METRICS,
-    VALUATION_METRICS,
-)
 from lti.ranking import ScreenSpec
 
 theme.header(
@@ -66,28 +59,13 @@ def _spread(cfg_key: str) -> pd.DataFrame:
 
 with st.sidebar:
     st.header("Strategy")
-    all_metrics = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
     magic = st.checkbox(
         "Greenblatt Magic Formula",
         value=False,
         help="EBIT/EV and return on capital, equally weighted, financials and "
         "utilities excluded.",
     )
-    chosen = st.multiselect(
-        "Rank by",
-        all_metrics,
-        default=list(MAGIC_FORMULA_METRICS) if magic else ["pe", "debt_to_equity"],
-        disabled=magic,
-    )
-    if magic:
-        chosen = list(MAGIC_FORMULA_METRICS)
-    coverage = 100
-    if len(chosen) > 2:
-        coverage = st.slider(
-            "Rank companies with at least … % of the metrics", 50, 100, 100, step=10,
-            help="100% needs every metric, which shrinks the universe as the list grows. Lower, "
-                 "a company ranks on the average of the metrics it has.",
-        )
+    chosen, coverage = widgets.rank_by(["pe", "debt_to_equity"], magic=magic)
     top_n = st.slider("Top N", 5, 50, 30 if magic else 10)
     start = st.text_input("Start", "2013-01-01")
     end = st.text_input("End", "2024-01-01")
@@ -116,18 +94,11 @@ cfg_key = json.dumps(
         "market_cap_min": cap_floor_m * 1e6,
         "initial_capital": capital,
         "filters": {"exclude_financials": excl_fin, "exclude_utilities": excl_util},
-        "min_coverage": coverage / 100,
+        "min_coverage": coverage,
     }
 )
 
-# A button is only True on the rerun its click triggers; remember what was run so
-# that toggling a chart option below doesn't blank the page. Changing the strategy
-# changes the key, which asks for a fresh run.
-if go_btn:
-    st.session_state["backtest_key"] = cfg_key
-if st.session_state.get("backtest_key") != cfg_key:
-    st.info("Set the strategy in the sidebar and hit **Run backtest**.")
-    st.stop()
+widgets.run_gate("backtest", go_btn, cfg_key, "Set the strategy in the sidebar and hit **Run backtest**.")
 
 try:
     equity, bench, universe, holdings, period_summary, stats, warnings = _run(cfg_key)
@@ -219,8 +190,7 @@ if not period_summary.empty:
             hovertemplate=f"%{{x}}<br>strategy − {label}: %{{y:+.1%}}<extra></extra>",
         )
     )
-    fig2.update_traces(marker_line_width=0, marker_cornerradius=4)
-    fig2.update_layout(bargap=0.34)
+    theme.bar_marks(fig2, color=None)
     theme.zero_line(fig2, axis="y")
     beat = int((ps[col] > 0).sum())
     theme.note(
@@ -240,9 +210,7 @@ theme.note(
     "whether a screen beats its universe. Running the same strategy once per month shows how "
     "much of the result above is the screen and how much is the calendar."
 )
-if st.button("Run all 12 rebalance months"):
-    st.session_state["backtest_spread_key"] = cfg_key
-if st.session_state.get("backtest_spread_key") == cfg_key:
+if widgets.ran_with("backtest_spread", st.button("Run all 12 rebalance months"), cfg_key):
     spread = _spread(cfg_key)
     if spread.empty:
         st.info("No month produced a result for this date range.")
@@ -261,8 +229,7 @@ if st.session_state.get("backtest_spread_key") == cfg_key:
                 ),
             )
         )
-        fig3.update_traces(marker_line_width=0, marker_cornerradius=4)
-        fig3.update_layout(bargap=0.34)
+        theme.bar_marks(fig3, color=None)
         theme.zero_line(fig3, axis="y")
         ex = sp["excess_vs_univ"]
         theme.note(
@@ -286,7 +253,4 @@ with st.expander("Holdings (every pick, every period)"):
     st.dataframe(holdings, hide_index=True, width="stretch")
     st.download_button("Download holdings CSV", holdings.to_csv(index=False).encode(), "holdings.csv", "text/csv")
 
-if warnings:
-    with st.expander(f"Warnings ({len(warnings)})"):
-        for w in warnings:
-            st.text(w)
+widgets.warnings_expander(warnings)

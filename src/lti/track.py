@@ -79,11 +79,7 @@ RECORD_COLUMNS = ["record_date", "strategy", "rank", "ticker", "cik", "company",
 def universe(snap: pd.DataFrame, cap_min: float = UNIVERSE_CAP_MIN) -> pd.DataFrame:
     """The tracked universe, with the study's composites scored within it."""
     u = snap[snap["price"].notna() & (snap["price"] > 0) & (snap["market_cap"] >= cap_min)]
-    if "is_financial" in u.columns:
-        u = u[~u["is_financial"].fillna(False).astype(bool)]
-    if "sic" in u.columns:
-        u = u[~sectors.is_investment_company(u["sic"])]
-    u = u.copy()
+    u = sectors.drop_financials(u).copy()
     for name, parts in study.COMPOSITES.items():
         u[name] = factor.composite_score(u, parts)
     return u

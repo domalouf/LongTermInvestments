@@ -82,10 +82,11 @@ def summarize(
 ) -> dict:
     p_mdd, p_peak, p_trough = max_drawdown(port)
     b_mdd, _, _ = max_drawdown(bench)
+    p_cagr, b_cagr = cagr(port), cagr(bench)
     stats = {
-        "port_cagr": cagr(port),
-        "bench_cagr": cagr(bench),
-        "excess_cagr": cagr(port) - cagr(bench),
+        "port_cagr": p_cagr,
+        "bench_cagr": b_cagr,
+        "excess_cagr": p_cagr - b_cagr,
         "port_total_return": total_return(port),
         "bench_total_return": total_return(bench),
         "port_vol": annual_vol(port),
