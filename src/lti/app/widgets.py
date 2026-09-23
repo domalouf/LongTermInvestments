@@ -2,9 +2,9 @@
 
 :mod:`lti.app.theme` owns what the app looks like; this module owns the few
 controls and blocks the pages would otherwise each keep their own copy of — the
-metric picker three pages share, the cost and tax settings both backtest pages
-take, the "hit Run first" gate, the warnings fold, the model explainer, and the
-one cached read of the fundamentals table.
+metric picker three pages share, the turnover buffer and the cost and tax
+settings both backtest pages take, the "hit Run first" gate, the warnings fold,
+the model explainer, and the one cached read of the fundamentals table.
 
 The cache matters: every page that calls :func:`fundamentals` shares a single
 copy of the table rather than holding one apiece.
@@ -59,6 +59,21 @@ def rank_by(default: list[str], *, magic: bool = False) -> tuple[list[str], floa
              "a company ranks on the average of the metrics it has.",
     )
     return chosen, pct / 100
+
+
+def sell_rank(top_n: int) -> int | None:
+    """The buffer against turnover: how far a holding may slip before it's sold.
+
+    ``None`` when there is no buffer — a holding goes the moment it leaves the top N.
+    """
+    rank = st.slider(
+        "Sell a holding once it drops out of the top", top_n, 4 * top_n, top_n,
+        help=f"At {top_n}, no buffer: whatever leaves the top {top_n} is sold, however narrowly. "
+             "Higher, a holding stays until it falls out of this many, and only the places that "
+             "frees are refilled — so a name drifting from 28th to 33rd isn't sold and bought back "
+             "a year later. Twice the top N is a common choice.",
+    )
+    return rank if rank > top_n else None
 
 
 def frictions() -> dict:

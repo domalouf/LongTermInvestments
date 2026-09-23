@@ -32,6 +32,7 @@ def _run(cfg_key: str):
         end=raw["end"] or None,
         rebalance_month=raw["rebalance_month"],
         market_cap_min=raw["market_cap_min"],
+        sell_rank=raw.get("sell_rank"),
         **widgets.friction_kwargs(raw["frictions"]),
     )
     result = run_rolling_backtest(cfg)
@@ -42,6 +43,7 @@ with st.sidebar:
     st.header("Strategy")
     chosen, coverage = widgets.rank_by(["pe", "debt_to_equity"])
     top_n = st.slider("Top N", 5, 50, 10)
+    sell_rank = widgets.sell_rank(top_n)
     windows = st.multiselect("Window lengths (years)", [1, 2, 3, 5, 7, 10], default=[3, 5])
     step_months = st.slider("Step between window starts (months)", 1, 24, 12)
     start = st.text_input("Earliest start (blank = all the price history)", "")
@@ -72,6 +74,7 @@ cfg_key = json.dumps(
         "end": end.strip(),
         "rebalance_month": rebal_month,
         "market_cap_min": cap_floor_m * 1e6,
+        "sell_rank": sell_rank,
         "frictions": fric,
     }
 )

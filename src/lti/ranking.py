@@ -112,5 +112,23 @@ def top_picks(ranked: pd.DataFrame, top_n: int) -> list[str]:
     return list(dict.fromkeys(picks.tolist()))
 
 
+def buffered_picks(ranked: pd.DataFrame, top_n: int, held: list[str], sell_rank: int) -> list[str]:
+    """:func:`top_picks` with a buffer against turnover, in rank order.
+
+    A name already ``held`` stays while it still ranks in the top ``sell_rank``;
+    only the slots its departures free up go to the best-ranked names not held.
+    Rank noise near the cut-off — a holding slipping from 28th to 33rd — no
+    longer forces a sale, and the costs and taxes that come with one. With
+    ``sell_rank == top_n`` it picks exactly what :func:`top_picks` does.
+    """
+    if sell_rank < top_n:
+        raise ValueError(f"sell_rank ({sell_rank}) can't be inside the top_n ({top_n}) the screen buys")
+    order = top_picks(ranked, len(ranked))
+    keep = set(held) & set(order[:sell_rank])
+    fill = [t for t in order if t not in keep][: max(top_n - len(keep), 0)]
+    chosen = keep | set(fill)
+    return [t for t in order if t in chosen]
+
+
 def select(snapshot: pd.DataFrame, spec: ScreenSpec) -> list[str]:
     return top_picks(rank(snapshot, spec), spec.top_n)

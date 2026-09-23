@@ -92,19 +92,26 @@ def cmd_progress(args: argparse.Namespace) -> None:
 
 
 def _friction_kwargs(args: argparse.Namespace) -> dict:
-    """The cost and tax flags, as BacktestConfig / RollingConfig fields."""
+    """The turnover, cost and tax flags, as BacktestConfig / RollingConfig fields."""
     from lti.frictions import TaxRates
 
+    if args.sell_rank is not None and args.sell_rank < args.top_n:
+        raise SystemExit(f"--sell-rank ({args.sell_rank}) must be at least --top-n ({args.top_n})")
     tax = None
     if args.taxable:
         tax = TaxRates(short_term=args.short_term_tax, long_term=args.long_term_tax, dividends=args.dividend_tax)
-    return dict(cost_bps=args.cost_bps, tax=tax, hold_past_one_year=args.hold_past_year)
+    return dict(cost_bps=args.cost_bps, tax=tax, hold_past_one_year=args.hold_past_year, sell_rank=args.sell_rank)
 
 
 def _add_friction_args(p: argparse.ArgumentParser) -> None:
     from lti.frictions import DEFAULT_COST_BPS, TaxRates
 
     rates = TaxRates()
+    p.add_argument(
+        "--sell-rank", type=int, default=None,
+        help="keep a holding until it drops out of the top SELL_RANK, not the top N: a buffer "
+             "against turnover (e.g. --top-n 30 --sell-rank 60; default: no buffer)",
+    )
     p.add_argument(
         "--cost-bps", type=float, default=DEFAULT_COST_BPS,
         help=f"trading cost per dollar traded, one way, in basis points (default {DEFAULT_COST_BPS:g}; 0 = gross)",
@@ -148,6 +155,7 @@ def _screen_from_json(path: str):
         cost_bps=raw.get("cost_bps", DEFAULT_COST_BPS),
         tax=TaxRates(**raw["tax"]) if raw.get("tax") else None,
         hold_past_one_year=raw.get("hold_past_one_year", False),
+        sell_rank=raw.get("sell_rank"),
     )
 
 

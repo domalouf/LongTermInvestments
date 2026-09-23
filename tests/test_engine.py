@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -410,3 +412,41 @@ def test_holding_past_a_year_makes_every_gain_long_term(fund, px):
     dates = pd.to_datetime(patient.period_summary["rebalance_date"])
     assert all(b > a + pd.DateOffset(years=1) for a, b in zip(dates[:-1], dates[1:]))
     assert (dates.dt.month == 4).all()  # it drifts a few days a year, not out of the month
+
+
+def test_buffered_picks_keep_holdings_until_they_leave_the_buffer():
+    ranked = pd.DataFrame({"ticker": ["A", "B", "C", "D", "E", "F"], "composite_score": np.linspace(0.1, 0.9, 6)})
+
+    # no buffer to speak of: exactly the top N
+    assert ranking.buffered_picks(ranked, 2, ["E", "F"], 2) == ranking.top_picks(ranked, 2) == ["A", "B"]
+    # E still ranks inside the top 5, so it stays; the one free place goes to the best name not held
+    assert ranking.buffered_picks(ranked, 2, ["E", "F"], 5) == ["A", "E"]
+    # both inside the buffer: nothing is traded
+    assert ranking.buffered_picks(ranked, 2, ["D", "E"], 5) == ["D", "E"]
+    # a holding that left the universe altogether is sold
+    assert ranking.buffered_picks(ranked, 2, ["Z", "C"], 4) == ["A", "C"]
+    with pytest.raises(ValueError):
+        ranking.buffered_picks(ranked, 3, [], 2)
+
+
+def test_a_sell_buffer_trades_less_when_the_ranking_churns(fund, px):
+    # debt/equity rotates a place a year, so the cheapest two change every year
+    churn = fund.assign(liabilities=200 + ((fund["cik"] + fund["fiscal_year"]) % 6) * 30)
+    cfg = BacktestConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=2), start="2012-01-01", end="2021-01-01", market_cap_min=0.0
+    )
+    plain = run_backtest(cfg, fund=churn, px=px)
+    buffered = run_backtest(dataclasses.replace(cfg, sell_rank=4), fund=churn, px=px)
+
+    assert run_backtest(dataclasses.replace(cfg, sell_rank=2), fund=churn, px=px).holdings.equals(plain.holdings)
+    later = slice(1, None)  # the first rebalance only buys
+    assert buffered.period_summary["turnover"][later].mean() < plain.period_summary["turnover"][later].mean()
+    assert buffered.period_summary["n_held_over"][later].sum() > plain.period_summary["n_held_over"][later].sum()
+    assert buffered.stats["port_costs_pa"] < plain.stats["port_costs_pa"]
+    assert (buffered.period_summary["n_selected"] == 2).all()
+    # a kept name can rank below the top N, never below the buffer
+    assert buffered.holdings["rank"].max() <= 4 and plain.holdings["rank"].max() <= 2
+    assert buffered.holdings.loc[buffered.holdings["rank"] > 2, "held_over"].all()
+
+    with pytest.raises(ValueError):
+        run_backtest(dataclasses.replace(cfg, sell_rank=1), fund=churn, px=px)

@@ -41,6 +41,7 @@ def _config(cfg_key: str) -> BacktestConfig:
         rebalance_month=raw["rebalance_month"],
         market_cap_min=raw["market_cap_min"],
         initial_capital=raw["initial_capital"],
+        sell_rank=raw.get("sell_rank"),
         **widgets.friction_kwargs(raw["frictions"]),
     )
 
@@ -70,6 +71,7 @@ with st.sidebar:
     )
     chosen, coverage = widgets.rank_by(["pe", "debt_to_equity"], magic=magic)
     top_n = st.slider("Top N", 5, 50, 30 if magic else 10)
+    sell_rank = widgets.sell_rank(top_n)
     start = st.text_input("Start", "2013-01-01")
     end = st.text_input("End", "2024-01-01")
     rebal_month = st.slider(
@@ -99,6 +101,7 @@ cfg_key = json.dumps(
         "initial_capital": capital,
         "filters": {"exclude_financials": excl_fin, "exclude_utilities": excl_util},
         "min_coverage": coverage,
+        "sell_rank": sell_rank,
         "frictions": fric,
     }
 )
@@ -236,6 +239,17 @@ if has_frictions:
             "same rate on its own, smaller, turnover, so the gap to it is what the ranking adds after "
             "paying for the trading it takes."
         )
+        if sell_rank:
+            kept = period_summary["n_held_over"].iloc[1:].median()
+            notes.append(
+                f"The buffer kept a median <b>{kept:.0f} of {top_n}</b> holdings at each rebalance: a holding "
+                f"stays until it drops out of the top {sell_rank}."
+            )
+        elif len(period_summary) > 1:
+            notes.append(
+                "A buffer (<i>Sell a holding once it drops out of the top</i> …) keeps names that slip just "
+                "below the cut-off, which is the cheapest way to trade less."
+            )
     if taxed:
         share = stats["port_short_term_share"]
         rates = fric["tax"]

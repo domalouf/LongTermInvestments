@@ -45,6 +45,7 @@ class RollingConfig:
     cost_bps: float = DEFAULT_COST_BPS
     tax: TaxRates | None = None
     hold_past_one_year: bool = False
+    sell_rank: int | None = None  # as BacktestConfig: the buffer against turnover
 
 
 @dataclass
@@ -116,6 +117,7 @@ def run_rolling_backtest(
                 cost_bps=cfg.cost_bps,
                 tax=cfg.tax,
                 hold_past_one_year=cfg.hold_past_one_year,
+                sell_rank=cfg.sell_rank,
             )
             try:
                 result = run_backtest(bt_cfg, fund=fund, px=px)

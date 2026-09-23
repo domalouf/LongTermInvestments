@@ -59,6 +59,9 @@ class BacktestConfig:
     # every sale is a long-term gain — the calendar date lands on or just short
     # of the year in most years, which taxes each year's gains as short-term
     hold_past_one_year: bool = False
+    # a buffer against turnover: keep a holding until it drops out of the top
+    # sell_rank, rather than the moment it leaves the top N. None: no buffer
+    sell_rank: int | None = None
 
     @property
     def has_frictions(self) -> bool:
@@ -173,6 +176,8 @@ def run_backtest(
     rebal_dates = _rebalance_dates(trading_days, start, end, cfg.rebalance_month, cfg.hold_past_one_year)
     if len(rebal_dates) < 2:
         raise RuntimeError("need at least two rebalance dates in the date range")
+    if cfg.sell_rank is not None and cfg.sell_rank < cfg.screen.top_n:
+        raise ValueError(f"sell_rank ({cfg.sell_rank}) must be at least top_n ({cfg.screen.top_n})")
 
     spec = dataclasses.replace(
         cfg.screen,
@@ -192,6 +197,7 @@ def run_backtest(
     net_segments = {leg: [pd.Series({rebal_dates[0]: cfg.initial_capital})] for leg in LEGS}
     paid: dict[str, list[tuple[float, float]]] = {leg: [] for leg in LEGS}  # (costs, taxes) ÷ value, per period
     realized: list[tuple[float, float]] = []  # the strategy's net gains by term, $, per rebalance
+    held: list[str] = []  # the last rebalance's picks, which a buffer may keep
     if cfg.tax is not None and bench not in px.close.columns:
         warnings.append(f"{bench} has no split-adjusted close, so its dividends go untaxed")
 
@@ -205,7 +211,10 @@ def run_backtest(
             unpriced |= set(snap.loc[lacking & snap["ticker"].isin(px.adj.columns), "ticker"])
 
         ranked = ranking.rank(snap, spec)
-        picks = ranking.top_picks(ranked, spec.top_n)
+        if cfg.sell_rank is None:
+            picks = ranking.top_picks(ranked, spec.top_n)
+        else:
+            picks = ranking.buffered_picks(ranked, spec.top_n, held, cfg.sell_rank)
         if not picks:
             warnings.append(f"{rd.date()}: screen produced no picks")
             continue
@@ -226,7 +235,7 @@ def run_backtest(
 
         weight = 1.0 / len(picks)
         pick_rows = ranked.drop_duplicates("ticker").set_index("ticker")
-        detail = [c for c in ["company", "market_cap", *spec.metrics, "composite_score"] if c in pick_rows.columns]
+        detail = [c for c in ["company", "market_cap", *spec.metrics, "composite_score", "rank"] if c in pick_rows.columns]
         n_delisted = 0
         for t in picks:
             r, delisted = prices_mod.forward_return(px.adj, t, rd, nrd)
@@ -246,6 +255,7 @@ def run_backtest(
                     "benchmark_period_return": bench_ret,
                     "universe_period_return": univ_ret,
                     "delisted": bool(delisted),
+                    "held_over": t in held,  # kept from the last rebalance
                 }
             )
 
@@ -276,6 +286,8 @@ def run_backtest(
         t = trades["port"]
         port_costs, port_taxes = paid["port"][-1]
         realized.append((t.short_term_gain, t.long_term_gain))
+        n_held_over = len(set(picks) & set(held))
+        held = picks
 
         period_rows.append(
             {
@@ -284,6 +296,7 @@ def run_backtest(
                 "n_selected": len(picks),
                 "n_universe": len(universe),
                 "n_delisted": n_delisted,
+                "n_held_over": n_held_over,
                 "port_return": port_ret,
                 "univ_return": univ_ret,
                 "bench_return": bench_ret,

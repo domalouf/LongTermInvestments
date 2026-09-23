@@ -66,6 +66,7 @@ lti rolling-backtest --metrics pe,debt_to_equity --top-n 10 --windows 3,5   # ov
 #     --cost-bps 0            gross: no trading costs
 #     --taxable               tax dividends and realized gains (--short-term-tax, --long-term-tax, --dividend-tax)
 #     --hold-past-year        wait a year and a day between rebalances, so every gain is long-term
+#     --sell-rank 60          with --top-n 30: keep a holding until it drops out of the top 60
 
 # 4a. Greenblatt's Magic Formula (EBIT/EV + return on capital, no financials/utilities)
 lti backtest --magic-formula --top-n 30 --start 2013-01-01
@@ -249,6 +250,17 @@ passed, which drifts the rebalance a few days later each year. It's half of what
 advises for running the Magic Formula in a taxable account; the other half, selling losers
 just *before* the year, would need two trading dates a year.
 
+**Trading less: a sell buffer.** Without one, a holding is sold the moment it slips out of
+the top N — 30th to 31st is enough — and often bought back a year later, paying the cost
+and the tax both ways for rank noise. `--sell-rank` (*Sell a holding once it drops out of
+the top* …) keeps a holding until it falls out of a wider band, and refills only the places
+its departures free up with the best-ranked names not already held: `--top-n 30
+--sell-rank 60` buys the top 30 but sells only below 60th. The price is that the portfolio
+holds some names the screen no longer ranks in its top N. Each period records
+`n_held_over`, and each holding `held_over` and the `rank` it was bought or kept at, so the
+trade-off shows in the turnover, the costs and the taxes against the same run without it.
+Off by default (`sell_rank = None`).
+
 Each backtest reports, beside the usual statistics (which are now net): `*_cagr_gross`,
 `*_costs_pa` and `*_taxes_pa` (the average paid per rebalance period, as a share of the
 portfolio), `*_cagr_liquidated`, and `port_short_term_share`; each period adds
@@ -352,7 +364,8 @@ PP&E, interest-bearing debt, as-reported operating income and share counts from 
 ### 🧪 Backtest — simulate a strategy vs SPY and vs its own universe
 Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month** —
 April by default, when calendar-year 10-Ks are in; in January a screen ranks on
-fundamentals a median of a year old — **Min market cap**, **Initial capital**) and the
+fundamentals a median of a year old — **Min market cap**, **Initial capital**, and the sell
+buffer: **Sell a holding once it drops out of the top** …) and the
 **Costs and taxes** (trading cost, taxable account, the three rates, *Sell only after a
 full year* — see [Trading costs and taxes](#trading-costs-and-taxes)); hit **Run backtest**.
 
