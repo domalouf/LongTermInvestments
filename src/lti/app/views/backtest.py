@@ -335,22 +335,29 @@ if not period_summary.empty and period_summary["top_industry_share"].notna().any
         )
     )
     theme.bar_marks(fig_ind)
+    top = float(ps["top_industry_share"].max())
     if industry_cap:
-        theme.zero_line(fig_ind, axis="y", value=industry_cap)
+        # drawn to stand apart from the gridlines, with headroom above so it isn't the frame's top edge
+        fig_ind.add_hline(y=industry_cap, line_width=1.5, line_dash="dash", line_color=theme.ORANGE)
+        fig_ind.add_annotation(
+            x=1.0, xref="paper", y=industry_cap, yanchor="bottom", xanchor="right",
+            text=f"cap {industry_cap:.0%}", showarrow=False, font=dict(size=10.5, color=theme.ORANGE),
+        )
+        top = max(top, industry_cap)
     common = ps["top_industry"].mode()
     theme.note(
         f"The largest industry in the portfolio at each rebalance — on average <b>{ps['top_industry_share'].mean():.0%}"
         f"</b> of it, most often {common.iloc[0] if len(common) else '—'}. A screen can rank well on every "
         "metric and still be one bet on one industry. "
         + (
-            f"The line is the cap: at most {industry_cap:.0%} in any one."
+            f"The dashed line is the cap: at most {industry_cap:.0%} in any one."
             if industry_cap
             else "<i>Most in one industry</i> in the sidebar caps it."
         )
     )
     theme.show(
         fig_ind, height=280, legend=False,
-        yaxis=dict(tickformat=".0%", title="largest industry's share", rangemode="tozero"),
+        yaxis=dict(tickformat=".0%", title="largest industry's share", range=[0, top * 1.18]),
         xaxis=dict(title="", dtick=1),
     )
 
@@ -452,7 +459,38 @@ if widgets.ran_with("backtest_spread", st.button("Run all 12 rebalance months"),
             st.dataframe(sp.drop(columns=["month"]), hide_index=True, width="stretch")
 
 with st.expander("Per-period detail"):
-    st.dataframe(period_summary, hide_index=True, width="stretch")
+    returns_note = " After costs and taxes." if has_frictions else ""
+    st.dataframe(
+        period_summary, hide_index=True, width="stretch",
+        column_config={
+            "rebalance_date": st.column_config.DateColumn("Bought", format="YYYY-MM-DD"),
+            "exit_date": st.column_config.DateColumn("Held until", format="YYYY-MM-DD"),
+            "n_selected": st.column_config.NumberColumn("Picks"),
+            "n_universe": st.column_config.NumberColumn("Ranked", help="Companies the screen ranked that day."),
+            "n_delisted": st.column_config.NumberColumn(
+                "Delisted", help="Picks whose prices stopped before the period ended."),
+            "n_held_over": st.column_config.NumberColumn(
+                "Kept", help="Picks already held from the rebalance before, so not bought again."),
+            "top_industry": st.column_config.TextColumn("Top industry", help="Fama-French 12, from SIC codes."),
+            "top_industry_share": st.column_config.NumberColumn("Its share", format="percent"),
+            "port_return": st.column_config.NumberColumn("Strategy", format="percent", help="Over the period." + returns_note),
+            "univ_return": st.column_config.NumberColumn("Universe", format="percent", help="Over the period." + returns_note),
+            "bench_return": st.column_config.NumberColumn("SPY", format="percent", help="Over the period." + returns_note),
+            "excess_return": st.column_config.NumberColumn("Strategy − SPY", format="percent"),
+            "excess_vs_univ": st.column_config.NumberColumn("Strategy − universe", format="percent"),
+            "port_return_gross": st.column_config.NumberColumn("Strategy before costs & taxes", format="percent"),
+            "turnover": st.column_config.NumberColumn(
+                "Turnover", format="percent", help="Share of the portfolio replaced at this rebalance, one way: a full swap is 100%."),
+            "costs": st.column_config.NumberColumn(
+                "Costs", format="percent", help="Paid to trade, as a share of what the strategy was worth going in."),
+            "taxes": st.column_config.NumberColumn(
+                "Taxes", format="percent", help="On gains and dividends, as a share of what the strategy was worth going in."),
+            "gains_short_term": st.column_config.NumberColumn(
+                "Short-term gains", format="percent", help="Realized at this rebalance, net of losses, as a share of the portfolio."),
+            "gains_long_term": st.column_config.NumberColumn(
+                "Long-term gains", format="percent", help="Realized at this rebalance, net of losses, as a share of the portfolio."),
+        },
+    )
 
 with st.expander("Holdings (every pick, every period)"):
     theme.note("Each pick with the metric values it was ranked on — the first place to look when a result seems too good.")

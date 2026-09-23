@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -34,6 +35,69 @@ def _stocks() -> set[str] | None:
 def _signed(v: float) -> str:
     """Dollars with the sign in front: +$1,234, −$567."""
     return f"{'−' if v < 0 else '+'}${abs(v):,.0f}"
+
+
+# Cell formats for the tables. A Styler rather than column_config formats, which
+# can't group thousands or put a sign before the $. Neither can do anything about a
+# missing value — the grid draws every null as "None" — so the tables below are
+# built not to have any.
+DASH = "—"
+
+
+def _dollars(v, cents: bool = False) -> str:
+    if pd.isna(v):
+        return DASH
+    return f"{'−' if v < 0 else ''}${abs(v):,.{2 if cents else 0}f}"
+
+
+def _signed_cell(v) -> str:
+    return DASH if pd.isna(v) else _signed(v)
+
+
+def _signed_cash(v) -> str:
+    """Dollars and cents with the sign in front: +$20,000.00, −$6,147.88."""
+    return DASH if pd.isna(v) else f"{'−' if v < 0 else '+'}${abs(v):,.2f}"
+
+
+def _pct(v, signed: bool = False) -> str:
+    if pd.isna(v):
+        return DASH
+    return f"{'−' if v < 0 else ('+' if signed else '')}{abs(v):.1%}"
+
+
+def _shares(v) -> str:
+    if pd.isna(v):
+        return ""
+    return f"{v:,.0f}" if float(v).is_integer() else f"{v:,.4f}".rstrip("0")
+
+
+def _ledger_view(ledger: pd.DataFrame) -> pd.DataFrame:
+    """The ledger to read, newest first: what each line did to the account's cash, and no nulls."""
+    t = ledger.sort_values(["date", "id"], ascending=False)
+    act, fees = t["action"], t["fees"].fillna(0.0)
+    trade = act.isin(["buy", "sell"])
+    gross = t["shares"] * t["price"]
+    cash = np.select(
+        [act == "buy", act == "sell", act == "withdraw"], [-(gross + fees), gross - fees, -t["amount"]],
+        default=t["amount"],
+    )
+    return pd.DataFrame({
+        "date": t["date"].dt.strftime("%Y-%m-%d"),
+        "action": act,
+        "ticker": t["ticker"].fillna(""),
+        "trade": [f"{_shares(n)} × {_dollars(p, cents=True)}" if is_trade else ""
+                  for is_trade, n, p in zip(trade, t["shares"], t["price"])],
+        "cash": cash,
+        "fees": fees.where(trade, 0.0),
+        "kind": t["kind"].fillna(""),
+        "note": t["note"].fillna(""),
+    })
+
+
+def _styled(df: pd.DataFrame, formats: dict):
+    """``df`` with every shown column formatted — a Styler shows any column left out raw."""
+    shown = df[[c for c in formats if c in df.columns]]
+    return shown.style.format({c: f for c, f in formats.items() if c in shown.columns})
 
 
 ledger = portfolio.load_ledger()
@@ -98,10 +162,12 @@ k[3].metric(
     if pd.notna(s["spy_same_flows"]) else "SPY isn't in the price cache.",
 )
 if years >= 1 and pd.notna(s["money_weighted"]):
+    spy_mw = s["spy_money_weighted"]
+    # the delta is the gap to SPY, so its colour says ahead or behind — not SPY's own return
     k[4].metric("Money-weighted return", f"{s['money_weighted']:+.1%} a year",
-                f"SPY {s['spy_money_weighted']:+.1%}" if pd.notna(s["spy_money_weighted"]) else None,
-                help="The rate your deposits and withdrawals, and what's there now, work out to (XIRR). "
-                     "SPY's is the same flows in SPY.")
+                f"{(s['money_weighted'] - spy_mw) * 100:+.1f} pts vs SPY" if pd.notna(spy_mw) else None,
+                help="The rate your deposits and withdrawals, and what's there now, work out to (XIRR)."
+                     + (f" The same flows in SPY work out to {spy_mw:+.1%} a year." if pd.notna(spy_mw) else ""))
 else:
     k[4].metric("Money-weighted return", "—", help="Shown after a year: a few months' return, annualized, "
                                                     "says more about the calendar than about you.")
@@ -129,20 +195,28 @@ if pd.notna(s["time_weighted_pa"]) and years >= 1:
 
 st.header("Stocks you picked, against funds")
 sl = acct.sleeves
+cash_row = sl[sl["sleeve"] == "Cash"]
+sl = sl[sl["sleeve"] != "Cash"]  # it has a value and nothing else, so it goes in the caption
 st.dataframe(
-    sl, hide_index=True, width="stretch",
+    _styled(sl, {
+        "sleeve": str, "value": _dollars, "weight": _pct, "money_in": _dollars,
+        "money_weighted": lambda v: _pct(v, signed=True), "spy_same_flows": _dollars, "vs_spy": _signed_cell,
+    }),
+    hide_index=True, width="stretch",
     column_config={
         "sleeve": st.column_config.TextColumn(""),
-        "value": st.column_config.NumberColumn("Value", format="$%.0f"),
-        "weight": st.column_config.NumberColumn("Of the account", format="percent"),
+        "value": st.column_config.NumberColumn("Value"),
+        "weight": st.column_config.NumberColumn("Of the account"),
         "money_in": st.column_config.NumberColumn(
-            "Money in, net", format="$%.0f", help="What went into its buys, less what came out of sales and dividends."),
-        "money_weighted": st.column_config.NumberColumn("Money-weighted return", format="percent"),
+            "Money in, net", help="What went into its buys, less what came out of sales and dividends."),
+        "money_weighted": st.column_config.NumberColumn("Money-weighted return", help="A year (XIRR)."),
         "spy_same_flows": st.column_config.NumberColumn(
-            "Same money in SPY", format="$%.0f", help="Every buy of these a buy of SPY, every sale and dividend a sale."),
-        "vs_spy": st.column_config.NumberColumn("Against SPY", format="$%+.0f"),
+            "Same money in SPY", help="Every buy of these a buy of SPY, every sale and dividend a sale."),
+        "vs_spy": st.column_config.NumberColumn("Against SPY"),
     },
 )
+if not cash_row.empty:
+    st.caption(f"And {_dollars(cash_row['value'].iloc[0])} in cash, {_pct(cash_row['weight'].iloc[0])} of the account.")
 picks = sl[sl["sleeve"] == "Stocks you picked"]
 if not picks.empty and pd.notna(picks["vs_spy"].iloc[0]):
     ahead = picks["vs_spy"].iloc[0] >= 0
@@ -159,29 +233,52 @@ st.header("Holdings")
 cols = {
     "ticker": st.column_config.TextColumn("Ticker", width="small"),
     "kind": st.column_config.TextColumn("Kind", width="small"),
-    "shares": st.column_config.NumberColumn("Shares", format="%.4g", help="On today's share basis."),
-    "avg_cost": st.column_config.NumberColumn("Avg cost", format="$%.2f"),
-    "price": st.column_config.NumberColumn("Price", format="$%.2f"),
-    "value": st.column_config.NumberColumn("Value", format="$%.0f"),
-    "weight": st.column_config.NumberColumn("Weight", format="percent"),
-    "unrealized": st.column_config.NumberColumn("Unrealized", format="$%+.0f"),
-    "unrealized_pct": st.column_config.NumberColumn("", format="percent"),
-    "realized": st.column_config.NumberColumn("Realized", format="$%+.0f"),
-    "income": st.column_config.NumberColumn("Dividends", format="$%.0f"),
-    "money_weighted": st.column_config.NumberColumn("Money-weighted", format="percent"),
+    "shares": st.column_config.NumberColumn("Shares", help="On today's share basis."),
+    "avg_cost": st.column_config.NumberColumn("Avg cost"),
+    "price": st.column_config.NumberColumn("Price"),
+    "value": st.column_config.NumberColumn("Value"),
+    "weight": st.column_config.NumberColumn("Weight"),
+    "unrealized": st.column_config.NumberColumn("Unrealized"),
+    "unrealized_pct": st.column_config.NumberColumn("Unrealized %", help="Against the average cost."),
+    "realized": st.column_config.NumberColumn("Realized"),
+    "income": st.column_config.NumberColumn("Dividends"),
+    "money_weighted": st.column_config.NumberColumn("Money-weighted", help="A year (XIRR)."),
     "vs_spy": st.column_config.NumberColumn(
-        "Against SPY", format="$%+.0f", help="Against the same buys, sales and dividends in SPY instead."),
-    "first_bought": st.column_config.DateColumn("First bought", format="YYYY-MM-DD"),
+        "Against SPY", help="Against the same buys, sales and dividends in SPY instead."),
+    "first_bought": st.column_config.TextColumn("First bought"),
 }
-order = list(cols)
-st.dataframe(held[[c for c in order if c in held.columns]], hide_index=True, width="stretch", column_config=cols)
+holding_formats = {
+    "ticker": str, "kind": str, "shares": _shares, "avg_cost": lambda v: _dollars(v, cents=True),
+    "price": lambda v: _dollars(v, cents=True), "value": _dollars, "weight": _pct, "unrealized": _signed_cell,
+    "unrealized_pct": lambda v: _pct(v, signed=True), "realized": _signed_cell, "income": _dollars,
+    "money_weighted": lambda v: _pct(v, signed=True), "vs_spy": _signed_cell,
+    "first_bought": lambda d: pd.Timestamp(d).strftime("%Y-%m-%d") if pd.notna(d) else DASH,
+}
+st.dataframe(_styled(held, holding_formats), hide_index=True, width="stretch", column_config=cols)
 if not closed.empty:
     with st.expander(f"Closed positions ({len(closed)})"):
-        st.dataframe(closed[[c for c in order if c in closed.columns]], hide_index=True, width="stretch",
-                     column_config=cols)
+        st.dataframe(_styled(closed, holding_formats), hide_index=True, width="stretch", column_config=cols)
 
 with st.expander(f"Transactions ({len(ledger)})"):
-    st.dataframe(ledger.sort_values(["date", "id"], ascending=False), hide_index=True, width="stretch")
+    st.dataframe(
+        _styled(_ledger_view(ledger), {
+            "date": str, "action": str, "ticker": str, "trade": str, "cash": _signed_cash,
+            "fees": lambda v: _dollars(v, cents=True) if v else "", "kind": str, "note": str,
+        }),
+        hide_index=True, width="stretch",
+        column_config={
+            "date": st.column_config.TextColumn("Date"),
+            "action": st.column_config.TextColumn("Action"),
+            "ticker": st.column_config.TextColumn("Ticker"),
+            "trade": st.column_config.TextColumn("Shares × price", help="As the broker showed them that day."),
+            "cash": st.column_config.NumberColumn(
+                "Cash", help="What the line added to the account's cash or took from it, fees included."),
+            "fees": st.column_config.NumberColumn("Fees"),
+            "kind": st.column_config.TextColumn(
+                "Counts as", help="Blank when left to the page: a company that files 10-Ks is a stock, anything else a fund."),
+            "note": st.column_config.TextColumn("Note"),
+        },
+    )
     st.download_button("Download CSV", ledger.to_csv(index=False).encode(), "portfolio.csv", "text/csv")
     st.caption("Stored in `data/track/portfolio.jsonl`, one line per transaction; the page only ever "
                "appends, so fix a mistake by editing that file. The nightly job copies `data/track/` "
