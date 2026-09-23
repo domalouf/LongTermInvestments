@@ -56,6 +56,7 @@ lti coverage
 # 3. Map CIKs to tickers, then cache prices for the universe (resumable)
 lti refresh-tickers
 lti fetch-prices                 # thousands of tickers via yfinance — takes about an hour
+                                 # (plus whatever your portfolio holds, index funds included)
 lti refresh-prices              # later: cheap daily top-up of already-cached tickers
 lti fetch-rates                 # the 10-year Treasury and AAA yields from FRED, which valuation discounts at
 
@@ -89,6 +90,9 @@ lti track-record                 # write down what each tracked strategy holds t
 lti track-report                 # how the records have done since
 lti journal-add AAPL buy --thesis "why" --change-my-mind "what would prove it wrong"
 lti journal                      # every logged decision and how it has aged
+lti portfolio-add deposit --amount 10000          # your own account (see "Portfolio" below)
+lti portfolio-add buy VTI --shares 20             # at that day's close unless --price
+lti portfolio                    # holdings, returns, and the same money in SPY
 
 # 5. GUI (see "GUI" section below)
 streamlit run src/lti/app/Home.py
@@ -330,7 +334,7 @@ streamlit run src/lti/app/Home.py          # opens http://localhost:8501
 
 **Undervalued today is the landing page.** The sidebar groups the rest by what you're
 there to do: *Find something to buy* (Undervalued, Stock detail), *Test an idea*
-(Screener, Backtest, Rolling backtest, Factor analysis), *Keep score* (Track record, Decision journal)
+(Screener, Backtest, Rolling backtest, Factor analysis), *Keep score* (Portfolio, Track record, Decision journal)
 and *Housekeeping* (Data health). Leave
 `LTI_SMOKE` unset to use the full `fundamentals.parquet`.
 
@@ -568,6 +572,33 @@ says so. Also on the CLI as `lti undervalued`; with `--out DIR` it writes a self
 `index.html` + `undervalued.{json,csv}`, which `deploy/` publishes nightly to
 `domalouf.com/invest/` as the public daily list.
 
+### 💼 Portfolio — your own account, against the same money in SPY
+The journal scores decisions but not how much money rode on them; this keeps the account
+itself. An append-only ledger (`data/track/portfolio.jsonl`) of deposits, withdrawals, buys,
+sales and income, logged on the page or with `lti portfolio-add`, is replayed against the
+price cache (`lti.portfolio`):
+
+- **Shares** are entered as the broker showed them that day and restated through every
+  split since, the way the screens restate EPS, so a split doesn't read as a loss.
+- **Dividends** on cached tickers are credited on each ex-date for the shares held the day
+  before; `income` is for what the cache lacks — interest, a fee (negative), a dividend on
+  something uncached. `lti fetch-prices` now caches every ticker in the ledger, index funds
+  included; after buying something new, rerun it — it only downloads what isn't cached yet.
+- **A buy beyond the cash on hand** counts the difference as new money that day, so a
+  ledger of trades alone adds up. Cost basis is the average cost, for display, not tax lots.
+
+The comparison it's built for: **the same money, moved on the same days, in SPY** — every
+deposit a purchase of SPY, every withdrawal a sale. The gap is what your choices were worth
+in dollars; the money-weighted return (XIRR) of each says it per year, and the time-weighted
+return takes the timing of your deposits out. The same comparison runs for every position
+(its buys, sales and dividends, in SPY instead) and for two sleeves: **the stocks you
+picked** — US companies that file 10-Ks — against **funds**, everything else (a foreign
+stock can be marked by hand). How much belongs in picks and how much in an index is the
+decision those two lines inform. Body: tiles (value, money in, gain, against SPY,
+money-weighted return — shown after a year, since a few months annualized say more about
+the calendar than about you), the account against the same money in SPY and the money put
+in, the sleeves, holdings and closed positions, and the ledger + CSV.
+
 ### 📒 Track record — the only test free of hindsight
 Every backtest here runs on a survivor-only universe, and every idea in this project was
 chosen after looking at the same fifteen years. The future is the one clean test, so
@@ -764,6 +795,7 @@ src/lti/
   study.py         the pre-registered factor test: hypotheses fixed in code, 2011-18 chooses, 2019-25 judges
   track.py         the forward track record: append-only daily holdings of each strategy, scored later
   journal.py       the decision journal: append-only decisions, each scored against SPY since
+  portfolio.py     your own account: a ledger replayed against the prices, against the same money in SPY
   stock.py         one company's annual fundamentals + valuation time series
   app/             Streamlit UI
     Home.py        entry point: page config, theme, navigation
@@ -776,7 +808,8 @@ tests/             pure-logic unit tests (no network / SEC data)
 
 `data/` (gitignored) holds everything generated: `data/sec/` (secfsdstools),
 `data/derived/` (fundamentals, ticker map), `data/prices/` (price panels, split and dividend history, interest rates),
-`data/track/` (the track record and the decision journal — the one part that can't be rebuilt).
+`data/track/` (the track record, the decision journal and your portfolio ledger — the one part
+that can't be rebuilt).
 
 ## Known limitations / v2 ideas
 

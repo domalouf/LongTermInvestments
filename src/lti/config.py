@@ -78,10 +78,11 @@ class Paths:
     prices_meta_parquet: Path
     rates_parquet: Path  # the 10-year Treasury and AAA corporate yields (lti.rates)
 
-    # forward track record + decision journal (append-only)
+    # forward track record, decision journal and your own portfolio (append-only)
     track_dir: Path
     track_records_dir: Path
     journal_jsonl: Path
+    portfolio_jsonl: Path
 
     def all_dirs(self) -> list[Path]:
         return [
@@ -148,6 +149,7 @@ def get_paths() -> Paths:
         track_dir=track,
         track_records_dir=track / "records",
         journal_jsonl=track / "journal.jsonl",
+        portfolio_jsonl=track / "portfolio.jsonl",
     )
 
 

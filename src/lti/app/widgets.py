@@ -38,6 +38,14 @@ def fundamentals() -> pd.DataFrame:
         st.stop()
 
 
+def fundamentals_or_none() -> pd.DataFrame | None:
+    """:func:`fundamentals` for a page that can do without it."""
+    try:
+        return _fundamentals()
+    except FileNotFoundError:
+        return None
+
+
 def rank_by(default: list[str], *, magic: bool = False) -> tuple[list[str], float]:
     """Which metrics to rank on, and the share of them a company must have to rank.
 

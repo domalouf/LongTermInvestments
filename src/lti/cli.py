@@ -66,6 +66,11 @@ def cmd_fetch_prices(args: argparse.Namespace) -> None:
         wanted.append(args.benchmark)
     else:
         wanted = fundamentals.price_universe(fundamentals.load_fundamentals()) + [args.benchmark]
+    if not args.smoke:
+        from lti import portfolio
+
+        # whatever you own gets priced too — an index fund isn't in the screening universe
+        wanted += [t for t in portfolio.ledger_tickers() if t not in wanted]
 
     prices.fetch_prices(wanted, start=args.start, batch_size=args.batch_size, force=args.force)
     report = prices.missing_report(wanted)
@@ -397,6 +402,80 @@ def cmd_journal(args: argparse.Namespace) -> None:
         print(f"\n{int(scored.sum())} of {len(scored)} scored decisions look right so far (against SPY).")
 
 
+def cmd_portfolio_add(args: argparse.Namespace) -> None:
+    from lti import portfolio
+
+    try:
+        e = portfolio.add_transaction(
+            args.action, ticker=args.ticker, shares=args.shares, price=args.price, amount=args.amount,
+            fees=args.fees, kind=args.kind, note=args.note or "", date=args.date,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"lti portfolio-add: {exc}") from None
+    what = (
+        f"{e['shares']:g} {e['ticker']} at ${e['price']:,.2f}" if e["ticker"] and e["shares"]
+        else f"${e['amount']:,.2f}" + (f" ({e['ticker']})" if e["ticker"] else "")
+    )
+    print(f"logged {e['id']}: {e['action']} {what} on {e['date']}")
+
+
+def cmd_portfolio(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import portfolio, prices
+
+    ledger = portfolio.load_ledger()
+    if ledger.empty:
+        print("the ledger is empty — `lti portfolio-add deposit --amount 10000`, then `lti portfolio-add buy TICKER --shares N`")
+        return
+    try:
+        from lti.fundamentals import load_fundamentals
+
+        stocks = portfolio.stock_tickers(load_fundamentals())
+    except FileNotFoundError:
+        stocks = None
+    acct = portfolio.replay(ledger, prices.load_price_data(), stocks=stocks)
+    s = acct.summary
+
+    def pct(v):
+        return f"{v:+.1%}" if pd.notna(v) else "—"
+
+    def share(v):
+        return f"{v:.1%}" if pd.notna(v) else "—"
+
+    print(f"\n=== portfolio on {s['asof'].date()} ({s['years']:.1f} years since the first money in) ===")
+    print(f"  value          ${s['value']:>14,.2f}   (cash ${s['cash']:,.2f})")
+    print(f"  money in, net  ${s['net_deposits']:>14,.2f}"
+          + (f"   (${s['implicit_deposits']:,.2f} of it counted from buys beyond the cash)" if s["implicit_deposits"] else ""))
+    print(f"  gain           ${s['gain']:>14,.2f}")
+    print(f"  the same money in SPY  ${s['spy_same_flows']:>14,.2f}   -> you are ${s['vs_spy']:+,.2f} against it")
+    print(f"  money-weighted return {pct(s['money_weighted'])} a year, SPY with the same flows {pct(s['spy_money_weighted'])}")
+    print(f"  time-weighted return  {pct(s['time_weighted_pa'])} a year, SPY {pct(s['spy_return_pa'])}")
+    if s["years"] < 1:
+        print("  (under a year in: the yearly rates are an extrapolation — read the dollars)")
+
+    h = acct.holdings.copy()
+    if not h.empty:
+        h = h.sort_values("value", ascending=False)
+        view = pd.DataFrame(
+            {
+                "ticker": h["ticker"], "kind": h["kind"], "shares": h["shares"].round(4),
+                "avg cost": h["avg_cost"].round(2), "price": h["price"].round(2), "value": h["value"].round(2),
+                "weight": h["weight"].map(share), "unrealized": h["unrealized"].round(2),
+                "realized": h["realized"].round(2), "income": h["income"].round(2),
+                "IRR": h["money_weighted"].map(pct), "vs SPY $": h["vs_spy"].round(2),
+            }
+        )
+        print("\n=== holdings (vs SPY: the position against the same buys, sales and dividends in SPY) ===")
+        print(view.to_string(index=False))
+    sl = acct.sleeves
+    print("\n=== picks against funds ===")
+    for r in sl.itertuples(index=False):
+        extra = "" if r.sleeve == "Cash" else f"  IRR {pct(r.money_weighted)}  vs the same money in SPY ${r.vs_spy:+,.2f}"
+        print(f"  {r.sleeve:<18} ${r.value:>12,.2f}  {share(r.weight):>6} of the account{extra}")
+    _print_warnings(acct.warnings)
+
+
 def cmd_undervalued(args: argparse.Namespace) -> None:
     import pandas as pd
 
@@ -650,6 +729,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     jl = sub.add_parser("journal", help="every logged decision and what the stock did since")
     jl.set_defaults(func=cmd_journal)
+
+    pa = sub.add_parser("portfolio-add", help="log a transaction in your own portfolio")
+    pa.add_argument("action", help="deposit, withdraw, buy, sell or income")
+    pa.add_argument("ticker", nargs="?", help="for a buy or sell (or income from one holding)")
+    pa.add_argument("--shares", type=float, help="as the broker showed them that day")
+    pa.add_argument("--price", type=float, help="per share; default: that day's close")
+    pa.add_argument("--amount", type=float, help="for a deposit, withdrawal or income (negative for a fee)")
+    pa.add_argument("--fees", type=float, default=0.0, help="commission on a buy or sell")
+    pa.add_argument("--kind", choices=["stock", "fund"], help="override how the ticker is classified")
+    pa.add_argument("--date", help="default: today")
+    pa.add_argument("--note")
+    pa.set_defaults(func=cmd_portfolio_add)
+
+    pf = sub.add_parser("portfolio", help="your portfolio: holdings, returns, and the same money in SPY")
+    pf.set_defaults(func=cmd_portfolio)
 
     em = sub.add_parser("explain-models", help="what each intrinsic-value equation does and assumes")
     em.add_argument("--width", type=int, default=92, help="wrap width (60-120)")
