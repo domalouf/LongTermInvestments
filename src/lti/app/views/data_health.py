@@ -30,6 +30,7 @@ ARTIFACTS = [
     ("Price cache (split-adjusted)", paths.close_parquet, "lti fetch-prices"),
     ("Split history", paths.splits_parquet, "lti fetch-prices"),
     ("Dividend history", paths.dividends_parquet, "lti fetch-prices"),
+    ("Interest rates", paths.rates_parquet, "lti fetch-rates"),
 ]
 
 present = [(n, p, c) for n, p, c in ARTIFACTS if p.exists()]

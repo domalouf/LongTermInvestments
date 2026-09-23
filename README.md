@@ -57,6 +57,7 @@ lti coverage
 lti refresh-tickers
 lti fetch-prices                 # thousands of tickers via yfinance — takes about an hour
 lti refresh-prices              # later: cheap daily top-up of already-cached tickers
+lti fetch-rates                 # the 10-year Treasury and AAA yields from FRED, which valuation discounts at
 
 # 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe),
 #    after 10 bps a trade — see "Trading costs and taxes" below
@@ -193,6 +194,32 @@ both are capped at the terminal rate inside the model.
 Note that this changes no return anywhere: `adj_close.parquet` has always been a
 total-return series, so the backtests, the factor study and the forward track record
 already counted every dividend. What is new is being able to *see* and *rank on* them.
+
+### Interest rates, as of each date
+
+Three of the six valuation models discount at a required return — the DCF, the dividend
+discount and earnings power — and Graham's revised formula scales by the AAA corporate
+yield. Held at a fixed 9% and 4.5%, every date was valued at the same rates: April 2013,
+when the 10-year Treasury paid 1.8%, the same as October 2023, when it paid nearly 5%. A
+backtest of `fair_value_upside` was scoring each year's list against rates nobody could
+have used then.
+
+`lti fetch-rates` caches two daily FRED series in `data/prices/rates.parquet`: the 10-year
+Treasury (`DGS10`) and Moody's seasoned AAA corporate yield (`DAAA`). Every valuation that
+has a date then uses that date's rates (`valuation.market_assumptions`): a discount rate of
+the Treasury plus an **equity risk premium** (5% by default, so a 4% Treasury gives the old
+9%), and the AAA yield for Graham. That covers `fair_value_upside` in every backtest and in
+the factor analysis, the Undervalued list and the public snapshot, and the tracked
+Undervalued strategy. The Undervalued, Stock and Screener pages swap the discount-rate
+slider for a premium slider and say what the rate came to; `lti undervalued
+--discount-rate` still sets a fixed one. The rates ride on `PriceData` beside the prices,
+so a backtest reads them point in time exactly as it reads a price.
+
+Without the cache — or more than two weeks past its last reading — everything falls back to
+the fixed 9% and 4.5%, so nothing breaks before the first fetch. The nightly job refreshes
+it. The Undervalued figures quoted below were measured at the fixed rates. Low rates raise
+every fair value, and long-duration ones most: in 2020, with the Treasury under 1%, far
+more names show upside, which is the point — that is what these models said at the time.
 
 ### Free cash flow and stock-based pay
 
@@ -341,7 +368,7 @@ more than one, plus `composite_score` = mean percentile-rank, lower = better), C
 download, a **"Ranked metric values"** bar chart per metric (each pick's value labelled,
 universe median marked; the old histogram is in a per-metric expander), and a
 **"Fair-value estimates"** table running the intrinsic-value models (below) on the picks
-with adjustable discount rate / max growth.
+with adjustable discount rate (or equity risk premium, with rates cached) / max growth.
 
 #### Greenblatt's Magic Formula (`ebit_ev` + `roic`)
 The screen from *The Little Book that Beats the Market*: rank the universe on how cheap
@@ -497,7 +524,8 @@ Body: eight tabs — **Price** (adjusted close with filing-date markers), **Inco
 **Balance sheet** (assets / liabilities / equity + debt-to-equity), **Cash flow**
 (CFO / capex / stock comp / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
 **Fair value** (intrinsic-value models, below, on normalized or latest-year earnings, with
-a per-company 5-year CAGR growth input and adjustable discount rate / terminal growth /
+a per-company 5-year CAGR growth input and adjustable discount rate (today's Treasury plus a
+premium, with rates cached) / terminal growth /
 DCF window), and **Raw data** (the annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and book
 value forward from its filing date, restate them onto today's share count using the
 cached split history, and price them off the split-adjusted close — without that,
@@ -601,7 +629,11 @@ since each filing, and priced off the split-adjusted close (`lti.pit.priced_snap
 not a 40% grower for a decade, and a negative one would value a shrinking business at less than
 zero. Pass an explicit `growth` Series (e.g. `historical_cagr(annual, "eps")`) to override the
 estimate. The rest is `ValuationAssumptions`: `discount_rate` (9%), `terminal_growth` (2.5%,
-forced at least a point below the discount rate), `dcf_years` (10), `bond_yield` (4.5%).
+forced at least a point below the discount rate), `dcf_years` (10), `bond_yield` (4.5%). With
+rates cached, a dated valuation replaces the discount rate with the 10-year Treasury on the
+date plus a 5% equity risk premium, and the bond yield with that day's AAA yield — see
+[Interest rates, as of each date](#interest-rates-as-of-each-date). The figures "at the
+defaults" below are at the fixed 9% and 4.5%.
 
 #### The six equations
 
@@ -714,6 +746,7 @@ src/lti/
   rawtags.py       SIC + debt / PP&E / goodwill / share counts straight from the raw SEC files
   sectors.py       SIC -> division and Fama-French industry, and the financials / utilities exclusions
   prices.py        yfinance cache: total-return + split-adjusted panels, split history (resumable)
+  rates.py         FRED's 10-year Treasury and AAA corporate yields, cached, read as of a date
   metrics.py       P/E, P/B, PEG, EBIT/EV, ROIC, debt/equity, ROE, margins, growth, ...
   history.py       five years of filings, point in time: normalized EPS/FCF, consistency, growth
   valuation.py     intrinsic-value models (DCF, Lynch, Graham, DDM, EPV) + rank_undervalued
@@ -742,7 +775,7 @@ tests/             pure-logic unit tests (no network / SEC data)
 ```
 
 `data/` (gitignored) holds everything generated: `data/sec/` (secfsdstools),
-`data/derived/` (fundamentals, ticker map), `data/prices/` (price panels + split history),
+`data/derived/` (fundamentals, ticker map), `data/prices/` (price panels, split and dividend history, interest rates),
 `data/track/` (the track record and the decision journal — the one part that can't be rebuilt).
 
 ## Known limitations / v2 ideas

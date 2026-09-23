@@ -76,6 +76,7 @@ class Paths:
     splits_parquet: Path
     dividends_parquet: Path
     prices_meta_parquet: Path
+    rates_parquet: Path  # the 10-year Treasury and AAA corporate yields (lti.rates)
 
     # forward track record + decision journal (append-only)
     track_dir: Path
@@ -143,6 +144,7 @@ def get_paths() -> Paths:
         splits_parquet=prices / "splits.parquet",
         dividends_parquet=prices / "dividends.parquet",
         prices_meta_parquet=prices / "_prices_meta.parquet",
+        rates_parquet=prices / "rates.parquet",
         track_dir=track,
         track_records_dir=track / "records",
         journal_jsonl=track / "journal.jsonl",

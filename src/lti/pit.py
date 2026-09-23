@@ -191,7 +191,8 @@ def priced_snapshot(
     ``with_history`` adds what takes several years of filings: the normalized
     and consistency metrics (:data:`lti.metrics.HISTORY_METRICS`, via
     :mod:`lti.history`) and the fair-value upsides built on them
-    (:data:`lti.metrics.VALUATION_METRICS`). It costs a pass over the history,
+    (:data:`lti.metrics.VALUATION_METRICS`), at the interest rates of ``asof``
+    where ``px`` carries them. It costs a pass over the history,
     so it's only worth asking for when something ranks on those.
     """
     asof = pd.Timestamp(asof)
@@ -222,5 +223,6 @@ def priced_snapshot(
         from lti import history, valuation  # both build on this module
 
         snap = history.add_history(snap, fund, asof, px.splits)
-        snap = valuation.add_fair_value_metrics(snap)
+        # valued at the rates of the day, not today's or a fixed 9%
+        snap = valuation.add_fair_value_metrics(snap, valuation.market_assumptions(asof, px.rates))
     return snap

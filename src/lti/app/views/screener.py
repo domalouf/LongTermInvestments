@@ -203,13 +203,13 @@ else:
     from lti.valuation import ValuationAssumptions, add_valuation_models
 
     fv1, fv2 = st.columns(2)
-    disc = fv1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+    rate_kw = widgets.rates(asof_ts, fv1)
     gcap = fv2.slider("Max growth", 0.05, 0.30, 0.15, 0.01, format="%.2f")
     picks_snap = ranked.head(top_n)
     basis = "normalized" if "eps_norm" in picks_snap.columns else "latest"
     v = add_valuation_models(
         picks_snap, picks_snap["price"],
-        assumptions=ValuationAssumptions(discount_rate=disc, growth_cap=gcap),
+        assumptions=ValuationAssumptions(**rate_kw, growth_cap=gcap),
         basis=basis,
     )
     from lti.valuation import MODELS

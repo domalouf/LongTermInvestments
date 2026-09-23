@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import lti.config as config
+from lti.rates import empty_rates, load_rates
 
 import numpy as np
 import pandas as pd
@@ -70,7 +71,7 @@ def empty_dividends() -> pd.DataFrame:
 
 @dataclass(frozen=True)
 class PriceData:
-    """The price cache as one object: what to value at, and what to measure returns with."""
+    """The market-data cache as one object: what to value at, and what to measure returns with."""
 
     adj: pd.DataFrame     # split- and dividend-adjusted close -> returns
     close: pd.DataFrame   # split-adjusted close -> valuation
@@ -78,6 +79,9 @@ class PriceData:
     # ticker, date, amount. Defaulted: a caller that only cares about prices
     # (most tests, anything pre-dividends) builds a PriceData from three frames.
     dividends: pd.DataFrame = field(default_factory=empty_dividends)
+    # the 10-year Treasury and AAA yields by date (lti.rates), which valuation
+    # discounts at; empty, it falls back to fixed rates
+    rates: pd.DataFrame = field(default_factory=empty_rates)
 
     @property
     def empty(self) -> bool:
@@ -554,7 +558,8 @@ def load_close() -> pd.DataFrame:
 
 def load_price_data() -> PriceData:
     return PriceData(
-        adj=load_adj_close(), close=load_close(), splits=load_splits(), dividends=load_dividends()
+        adj=load_adj_close(), close=load_close(), splits=load_splits(), dividends=load_dividends(),
+        rates=load_rates(),
     )
 
 

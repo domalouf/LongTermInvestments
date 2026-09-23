@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Nightly: refresh the price cache, add today to the forward track record,
+# Nightly: refresh the price cache and interest rates, add today to the forward track record,
 # regenerate the public "undervalued today" snapshot, and push the static files
 # to the Pi that serves domalouf.com.
 #
@@ -35,6 +35,11 @@ if [[ "${LTI_SKIP_PRICES:-0}" != "1" ]]; then
   log "refreshing price cache"
   lti refresh-prices
 fi
+
+# the valuations discount at today's 10-year Treasury; without a fresh reading
+# they fall back to a fixed rate, so a failure here isn't worth stopping for
+log "refreshing interest rates"
+lti fetch-rates || log "rate refresh failed — valuing at the cached or fixed rates"
 
 # the track record is append-only: a missed night is a gap, not a reason to
 # hold back the public snapshot

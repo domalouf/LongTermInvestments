@@ -352,7 +352,7 @@ with fv_tab:
             )
             basis = "normalized" if basis_label.startswith("Normalized") else "latest"
             a1, a2, a3 = st.columns(3)
-            disc = a1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+            rate_kw = widgets.rates(pd.Timestamp.today(), a1)
             term = a2.slider("Terminal growth", 0.0, 0.04, 0.025, 0.005, format="%.3f")
             years = a3.slider("DCF window (years)", 5, 15, 10)
 
@@ -372,9 +372,7 @@ with fv_tab:
                 "5-year CAGR needs positive EPS / revenue at both ends."
             )
 
-        assumptions = ValuationAssumptions(
-            discount_rate=disc, terminal_growth=term, dcf_years=years, fixed_growth=g_val
-        )
+        assumptions = ValuationAssumptions(**rate_kw, terminal_growth=term, dcf_years=years, fixed_growth=g_val)
         v = add_valuation_models(latest, pd.Series({cik: cur_price}), assumptions=assumptions, basis=basis)
         row = v.iloc[0]
 
@@ -439,7 +437,7 @@ with fv_tab:
             bits = [f"{'normalized' if basis == 'normalized' else 'latest-year'} earnings",
                     f"growth **{g_used:.1%}**" if pd.notna(g_used) else None,
                     f"dividend yield **{dy_used:.1%}**" if dy_used is not None and pd.notna(dy_used) else None,
-                    f"discount rate **{disc:.1%}**"]
+                    f"discount rate **{assumptions.discount_rate:.1%}**"]
             st.caption("Inputs: " + " · ".join(b for b in bits if b) + ". Each model's equation, "
                        "and where it breaks down, is spelled out below.")
 

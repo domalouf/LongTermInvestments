@@ -2,9 +2,10 @@
 
 :mod:`lti.app.theme` owns what the app looks like; this module owns the few
 controls and blocks the pages would otherwise each keep their own copy of — the
-metric picker three pages share, the turnover buffer, industry cap and cost and
-tax settings both backtest pages take, the "hit Run first" gate, the warnings
-fold, the model explainer, and the one cached read of the fundamentals table.
+metric picker three pages share, the discount rate every valuation takes, the
+turnover buffer, industry cap and cost and tax settings both backtest pages
+take, the "hit Run first" gate, the warnings fold, the model explainer, and the
+one cached read of the fundamentals table.
 
 The cache matters: every page that calls :func:`fundamentals` shares a single
 copy of the table rather than holding one apiece.
@@ -15,9 +16,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from lti import rates as rates_mod
 from lti.frictions import DEFAULT_COST_BPS, TaxRates
 from lti.metrics import ALL_METRICS, MAGIC_FORMULA_METRICS
-from lti.valuation import MODEL_DOCS, MODELS
+from lti.valuation import EQUITY_PREMIUM, MODEL_DOCS, MODELS
 
 
 @st.cache_data(show_spinner=False)
@@ -59,6 +61,40 @@ def rank_by(default: list[str], *, magic: bool = False) -> tuple[list[str], floa
              "a company ranks on the average of the metrics it has.",
     )
     return chosen, pct / 100
+
+
+def rates(asof, container=None) -> dict:
+    """The discount rate every valuation page asks for, as ``ValuationAssumptions`` fields.
+
+    Where :mod:`lti.rates` has the date, it's the market's: the 10-year Treasury
+    that day plus an equity risk premium set here, with that day's AAA yield for
+    Graham's revised formula. Where it doesn't, a fixed rate. Plain floats, so
+    the result can go into a cache key.
+    """
+    c = container if container is not None else st
+    now = rates_mod.rates_asof(rates_mod.load_rates(), asof)
+    treasury, aaa = now["treasury_10y"], now["aaa"]
+    if pd.isna(treasury):
+        disc = c.slider(
+            "Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f",
+            help="No 10-year Treasury yield is cached for this date: `lti fetch-rates` sets the rate from "
+                 "the market's at the date instead of a fixed guess.",
+        )
+        return {"discount_rate": disc}
+    premium = c.slider(
+        "Equity risk premium", 0.02, 0.09, EQUITY_PREMIUM, 0.005, format="%.3f",
+        help="What stocks must return over the 10-year Treasury. The discount rate is the two added, "
+             "so it moves with the rates of the date being valued.",
+    )
+    c.caption(
+        f"Discount rate **{treasury + premium:.2%}**: the 10-year Treasury's {treasury:.2%} on "
+        f"{pd.Timestamp(asof).date()}, plus {premium:.1%}."
+        + (f" AAA corporate yield {aaa:.2%}, for Graham revised." if pd.notna(aaa) else "")
+    )
+    out = {"discount_rate": float(treasury + premium)}
+    if pd.notna(aaa):
+        out["bond_yield"] = float(aaa)
+    return out
 
 
 def sell_rank(top_n: int) -> int | None:
@@ -108,13 +144,13 @@ def frictions() -> dict:
     out = {"cost_bps": cost, "tax": None, "hold_past_one_year": False}
     if taxable:
         d = TaxRates()
-        rates = {
+        pct = {
             "short_term": st.number_input("Short-term gains tax (%)", 0.0, 60.0, round(d.short_term * 100, 2), 1.0,
                                           help="Held a year or less: taxed as income."),
             "long_term": st.number_input("Long-term gains tax (%)", 0.0, 60.0, round(d.long_term * 100, 2), 1.0),
             "dividends": st.number_input("Dividend tax (%)", 0.0, 60.0, round(d.dividends * 100, 2), 1.0),
         }
-        out["tax"] = {k: v / 100 for k, v in rates.items()}
+        out["tax"] = {k: v / 100 for k, v in pct.items()}
         out["hold_past_one_year"] = st.checkbox(
             "Sell only after a full year", value=False,
             help="An annual rebalance on the first trading day of the month lands on or just short of the "

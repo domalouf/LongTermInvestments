@@ -79,6 +79,22 @@ def cmd_refresh_prices(args: argparse.Namespace) -> None:
     prices.refresh_prices(tickers, lookback_days=args.lookback_days, batch_size=args.batch_size)
 
 
+def cmd_fetch_rates(args: argparse.Namespace) -> None:
+    from lti import rates
+
+    try:
+        table = rates.fetch_rates()
+    except RuntimeError as exc:
+        raise SystemExit(f"lti fetch-rates: {exc}") from None
+    for col, sid in rates.FRED_SERIES.items():
+        s = table[col].dropna()
+        if s.empty:
+            print(f"  {col} ({sid}): nothing cached")
+        else:
+            print(f"  {col} ({sid}): {len(s):,} days, {s.index.min().date()} to {s.index.max().date()}, "
+                  f"latest {s.iloc[-1]:.2%}")
+
+
 def cmd_coverage(args: argparse.Namespace) -> None:
     from lti import fundamentals
 
@@ -384,12 +400,19 @@ def cmd_journal(args: argparse.Namespace) -> None:
 def cmd_undervalued(args: argparse.Namespace) -> None:
     import pandas as pd
 
-    from lti import prices, report
+    from lti import prices, rates, report
     from lti.fundamentals import load_fundamentals
-    from lti.valuation import ValuationAssumptions, rank_undervalued
+    from lti.valuation import ValuationAssumptions, market_assumptions, rank_undervalued
 
     asof = args.asof or pd.Timestamp.today().strftime("%Y-%m-%d")
-    assumptions = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
+    px = prices.load_price_data()
+    if args.discount_rate is not None:
+        assumptions = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
+    else:
+        # the Treasury on the day plus the premium, where rates are cached; the fixed 9% where not
+        assumptions = market_assumptions(
+            asof, px.rates, ValuationAssumptions(growth_cap=args.growth_cap), args.equity_premium
+        )
     # the screen's arguments double as the metadata the report publishes
     screen = {
         "asof": asof,
@@ -401,10 +424,11 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
         "require_positive_eps": not args.allow_negative_eps,
         "exclude_financials": not args.include_financials,
     }
-    params = {**screen, "discount_rate": args.discount_rate, "growth_cap": args.growth_cap}
-    ranked = rank_undervalued(
-        load_fundamentals(), prices.load_price_data(), assumptions=assumptions, **screen
-    )
+    params = {**screen, "discount_rate": assumptions.discount_rate, "growth_cap": args.growth_cap}
+    treasury = rates.rates_asof(px.rates, asof)["treasury_10y"]
+    if args.discount_rate is None and pd.notna(treasury):
+        params["treasury_10y"] = float(treasury)  # the report says what the rate was built from
+    ranked = rank_undervalued(load_fundamentals(), px, assumptions=assumptions, **screen)
 
     if args.out:
         written = report.write_artifacts(ranked, args.out, asof=asof, params=params)
@@ -531,6 +555,12 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--batch-size", type=int, default=40)
     rp.set_defaults(func=cmd_refresh_prices)
 
+    fr = sub.add_parser(
+        "fetch-rates",
+        help="cache the 10-year Treasury and AAA corporate yields from FRED, which valuation discounts at",
+    )
+    fr.set_defaults(func=cmd_fetch_rates)
+
     cv = sub.add_parser("coverage", help="print fundamentals coverage report")
     cv.set_defaults(func=cmd_coverage)
 
@@ -639,7 +669,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="keep banks, insurers, REITs and BDCs (the models assume an operating business)",
     )
     uv.add_argument("--min-roe", type=float, default=None, help="quality floor, e.g. 0.1")
-    uv.add_argument("--discount-rate", type=float, default=0.09)
+    uv.add_argument(
+        "--discount-rate", type=float, default=None,
+        help="a fixed rate; by default the 10-year Treasury on the as-of date plus --equity-premium "
+             "(cached by `lti fetch-rates`), else 0.09",
+    )
+    from lti.valuation import EQUITY_PREMIUM
+
+    uv.add_argument("--equity-premium", type=float, default=EQUITY_PREMIUM,
+                    help=f"added to the 10-year Treasury for the market discount rate (default {EQUITY_PREMIUM:g})")
     uv.add_argument("--growth-cap", type=float, default=0.15)
     uv.add_argument("--allow-negative-eps", action="store_true", help="drop the profitable-now requirement")
     uv.add_argument(

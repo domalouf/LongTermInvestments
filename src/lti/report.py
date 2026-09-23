@@ -151,7 +151,10 @@ def _params_summary(params: dict) -> str:
     if params.get("min_roe"):
         bits.append(f"ROE &ge; {params['min_roe']:.0%}")
     if params.get("discount_rate"):
-        bits.append(f"discount rate {params['discount_rate']:.1%}")
+        rate = f"discount rate {params['discount_rate']:.1%}"
+        if params.get("treasury_10y") is not None:
+            rate += f" (the 10-year Treasury&rsquo;s {params['treasury_10y']:.1%} plus a risk premium)"
+        bits.append(rate)
     return " &middot; ".join(bits)
 
 

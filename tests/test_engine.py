@@ -507,3 +507,35 @@ def test_a_sell_buffer_trades_less_when_the_ranking_churns(fund, px):
 
     with pytest.raises(ValueError):
         run_backtest(dataclasses.replace(cfg, sell_rank=1), fund=churn, px=px)
+
+
+def test_dated_valuations_discount_at_the_rates_of_their_date(fund, panel):
+    from lti.valuation import market_assumptions, rank_undervalued
+
+    cheap = panel.copy()
+    for c in [c for c in cheap.columns if c != "SPY"]:
+        cheap[c] = cheap[c] * 0.02
+    days = pd.bdate_range("2019-01-01", "2020-12-31")
+    low = pd.DataFrame({"treasury_10y": 0.01, "aaa": 0.025}, index=pd.DatetimeIndex(days, name="date"))
+    high = low.assign(treasury_10y=0.06, aaa=0.07)
+
+    def upside(rates):
+        px = PriceData(cheap, cheap, empty_splits(), rates=rates)
+        ranked = rank_undervalued(fund, px, "2020-06-01", market_cap_min=0.0, min_models=2, max_upside=None, top_n=None)
+        snap = pit.priced_snapshot(fund, "2020-06-01", px, with_history=True)
+        return ranked.set_index("ticker")["fair_value_est_upside"], snap.set_index("ticker")["fair_value_upside"]
+
+    listed_low, metric_low = upside(low)
+    listed_high, metric_high = upside(high)
+    listed_fixed, metric_fixed = upside(PriceData(panel, panel, empty_splits()).rates)  # none cached
+
+    def higher(a, b):  # on the names both lists hold — the upside floor moves with the rates
+        both = a.dropna().index.intersection(b.dropna().index)
+        return len(both) > 0 and bool((a[both] > b[both]).all())
+
+    # cheaper money, higher fair values — in the published list and in the backtest metric alike
+    assert higher(listed_low, listed_fixed) and higher(listed_fixed, listed_high)
+    assert higher(metric_low, metric_high)
+    assert len(listed_low) >= len(listed_high)  # and more names clear the positive-upside floor
+    # nothing cached is the fixed 9% of before
+    assert market_assumptions("2020-06-01", PriceData(panel, panel, empty_splits()).rates).discount_rate == 0.09
