@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from lti import metrics, pit, prices as prices_mod, ranking
+from lti import metrics, pit, prices as prices_mod, ranking, sectors
 from lti.frictions import DEFAULT_COST_BPS, Book, TaxRates, Trade
 from lti.performance import cagr, summarize
 from lti.ranking import ScreenSpec
@@ -62,6 +62,10 @@ class BacktestConfig:
     # a buffer against turnover: keep a holding until it drops out of the top
     # sell_rank, rather than the moment it leaves the top N. None: no buffer
     sell_rank: int | None = None
+    # at most this share of the picks in any one Fama-French industry
+    # (lti.sectors.industry), passing over a name whose industry is full for the
+    # next one down the ranking. None: no cap
+    industry_cap: float | None = None
 
     @property
     def has_frictions(self) -> bool:
@@ -178,6 +182,10 @@ def run_backtest(
         raise RuntimeError("need at least two rebalance dates in the date range")
     if cfg.sell_rank is not None and cfg.sell_rank < cfg.screen.top_n:
         raise ValueError(f"sell_rank ({cfg.sell_rank}) must be at least top_n ({cfg.screen.top_n})")
+    if cfg.industry_cap is not None and not 0 < cfg.industry_cap <= 1:
+        raise ValueError(f"industry_cap ({cfg.industry_cap}) must be a share of the portfolio, in (0, 1]")
+    # the cap as a count of equal-weighted names, never below one
+    max_per_industry = max(1, int(cfg.industry_cap * cfg.screen.top_n + 1e-9)) if cfg.industry_cap else None
 
     spec = dataclasses.replace(
         cfg.screen,
@@ -211,10 +219,16 @@ def run_backtest(
             unpriced |= set(snap.loc[lacking & snap["ticker"].isin(px.adj.columns), "ticker"])
 
         ranked = ranking.rank(snap, spec)
-        if cfg.sell_rank is None:
+        if "sic" in ranked.columns:
+            ranked["industry"] = sectors.industry(ranked["sic"])
+        elif max_per_industry is not None:
+            raise KeyError("the industry cap needs SIC codes, and the snapshot has none — rebuild with `lti build-fundamentals`")
+        if cfg.sell_rank is None and max_per_industry is None:
             picks = ranking.top_picks(ranked, spec.top_n)
         else:
-            picks = ranking.buffered_picks(ranked, spec.top_n, held, cfg.sell_rank)
+            picks = ranking.select_holdings(
+                ranked, spec.top_n, held=held, sell_rank=cfg.sell_rank, group="industry", max_per_group=max_per_industry
+            )
         if not picks:
             warnings.append(f"{rd.date()}: screen produced no picks")
             continue
@@ -235,7 +249,9 @@ def run_backtest(
 
         weight = 1.0 / len(picks)
         pick_rows = ranked.drop_duplicates("ticker").set_index("ticker")
-        detail = [c for c in ["company", "market_cap", *spec.metrics, "composite_score", "rank"] if c in pick_rows.columns]
+        detail = [
+            c for c in ["company", "industry", "market_cap", *spec.metrics, "composite_score", "rank"] if c in pick_rows.columns
+        ]
         n_delisted = 0
         for t in picks:
             r, delisted = prices_mod.forward_return(px.adj, t, rd, nrd)
@@ -287,6 +303,8 @@ def run_backtest(
         port_costs, port_taxes = paid["port"][-1]
         realized.append((t.short_term_gain, t.long_term_gain))
         n_held_over = len(set(picks) & set(held))
+        industries = pick_rows["industry"].reindex(picks).value_counts() if "industry" in pick_rows.columns else None
+        top_industry = industries.index[0] if industries is not None and len(industries) else None
         held = picks
 
         period_rows.append(
@@ -297,6 +315,9 @@ def run_backtest(
                 "n_universe": len(universe),
                 "n_delisted": n_delisted,
                 "n_held_over": n_held_over,
+                # the portfolio's largest industry, and its share of the picks
+                "top_industry": top_industry,
+                "top_industry_share": industries.iloc[0] / len(picks) if top_industry is not None else np.nan,
                 "port_return": port_ret,
                 "univ_return": univ_ret,
                 "bench_return": bench_ret,
@@ -329,6 +350,9 @@ def run_backtest(
         stats["periods_beat_univ"] = float((period_summary["excess_vs_univ"] > 0).mean())
         stats["periods_beat_bench"] = float((period_summary["excess_return"] > 0).mean())
     stats.update(_friction_stats(cfg, gross, curves, books, paid, realized))
+    stats["port_top_industry_share"] = (
+        float(period_summary["top_industry_share"].mean()) if not period_summary.empty else np.nan
+    )
 
     if unpriced:
         warnings.insert(

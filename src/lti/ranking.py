@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -112,21 +114,47 @@ def top_picks(ranked: pd.DataFrame, top_n: int) -> list[str]:
     return list(dict.fromkeys(picks.tolist()))
 
 
-def buffered_picks(ranked: pd.DataFrame, top_n: int, held: list[str], sell_rank: int) -> list[str]:
-    """:func:`top_picks` with a buffer against turnover, in rank order.
+def select_holdings(
+    ranked: pd.DataFrame,
+    top_n: int,
+    *,
+    held: Iterable[str] = (),
+    sell_rank: int | None = None,
+    group: str | None = None,
+    max_per_group: int | None = None,
+) -> list[str]:
+    """What to hold, in rank order: :func:`top_picks`, with two optional rules.
 
-    A name already ``held`` stays while it still ranks in the top ``sell_rank``;
-    only the slots its departures free up go to the best-ranked names not held.
-    Rank noise near the cut-off — a holding slipping from 28th to 33rd — no
-    longer forces a sale, and the costs and taxes that come with one. With
-    ``sell_rank == top_n`` it picks exactly what :func:`top_picks` does.
+    * **A sell buffer** (``sell_rank``). A name already ``held`` stays while it
+      still ranks in the top ``sell_rank``; only the places its departures free
+      up are refilled. Rank noise near the cut-off — a holding slipping from 28th
+      to 33rd — no longer forces a sale, and the costs and taxes that come with one.
+    * **A cap per group** (``max_per_group`` names sharing a value of the
+      ``group`` column). Walking down the ranking, a name whose group is full is
+      passed over for the next one. A name with no group is never capped. Kept
+      holdings count toward their group but aren't sold to make room.
+
+    With neither, it picks what :func:`top_picks` does.
     """
-    if sell_rank < top_n:
+    if sell_rank is not None and sell_rank < top_n:
         raise ValueError(f"sell_rank ({sell_rank}) can't be inside the top_n ({top_n}) the screen buys")
-    order = top_picks(ranked, len(ranked))
-    keep = set(held) & set(order[:sell_rank])
-    fill = [t for t in order if t not in keep][: max(top_n - len(keep), 0)]
-    chosen = keep | set(fill)
+    if ranked.empty or "ticker" not in ranked.columns:
+        return []
+    rows = ranked[ranked["ticker"].notna()].drop_duplicates("ticker")
+    order = rows["ticker"].tolist()
+    group_of = dict(zip(order, rows[group] if max_per_group is not None else [None] * len(order)))
+
+    chosen = set(held) & set(order[:sell_rank]) if sell_rank is not None else set()
+    counts = Counter(group_of[t] for t in chosen if not pd.isna(group_of[t]))
+    for t in order:
+        if len(chosen) >= top_n:
+            break
+        g = group_of[t]
+        if t in chosen or (not pd.isna(g) and counts[g] >= max_per_group):
+            continue
+        chosen.add(t)
+        if not pd.isna(g):
+            counts[g] += 1
     return [t for t in order if t in chosen]
 
 

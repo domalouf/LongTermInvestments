@@ -46,6 +46,7 @@ class RollingConfig:
     tax: TaxRates | None = None
     hold_past_one_year: bool = False
     sell_rank: int | None = None  # as BacktestConfig: the buffer against turnover
+    industry_cap: float | None = None  # and the most in any one industry
 
 
 @dataclass
@@ -118,6 +119,7 @@ def run_rolling_backtest(
                 tax=cfg.tax,
                 hold_past_one_year=cfg.hold_past_one_year,
                 sell_rank=cfg.sell_rank,
+                industry_cap=cfg.industry_cap,
             )
             try:
                 result = run_backtest(bt_cfg, fund=fund, px=px)

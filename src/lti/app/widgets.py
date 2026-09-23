@@ -2,9 +2,9 @@
 
 :mod:`lti.app.theme` owns what the app looks like; this module owns the few
 controls and blocks the pages would otherwise each keep their own copy of — the
-metric picker three pages share, the turnover buffer and the cost and tax
-settings both backtest pages take, the "hit Run first" gate, the warnings fold,
-the model explainer, and the one cached read of the fundamentals table.
+metric picker three pages share, the turnover buffer, industry cap and cost and
+tax settings both backtest pages take, the "hit Run first" gate, the warnings
+fold, the model explainer, and the one cached read of the fundamentals table.
 
 The cache matters: every page that calls :func:`fundamentals` shares a single
 copy of the table rather than holding one apiece.
@@ -74,6 +74,19 @@ def sell_rank(top_n: int) -> int | None:
              "a year later. Twice the top N is a common choice.",
     )
     return rank if rank > top_n else None
+
+
+def industry_cap() -> float | None:
+    """The most of the portfolio allowed in one industry, as a share; ``None`` for no cap."""
+    pct = st.slider(
+        "Most in one industry (%)", 10, 100, 100, step=5,
+        help="Walking down the ranking, a name whose industry already fills this share of the "
+             "portfolio is passed over for the next one. Industries are Fama and French's 12, from "
+             "SIC codes — Shops, Telecom, Health, Business Equipment, Energy and so on. The SIC "
+             "divisions are too coarse for this: Manufacturing alone is half the market. "
+             "100% is no cap.",
+    )
+    return pct / 100 if pct < 100 else None
 
 
 def frictions() -> dict:

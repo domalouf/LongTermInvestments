@@ -67,6 +67,7 @@ lti rolling-backtest --metrics pe,debt_to_equity --top-n 10 --windows 3,5   # ov
 #     --taxable               tax dividends and realized gains (--short-term-tax, --long-term-tax, --dividend-tax)
 #     --hold-past-year        wait a year and a day between rebalances, so every gain is long-term
 #     --sell-rank 60          with --top-n 30: keep a holding until it drops out of the top 60
+#     --industry-cap 0.2      at most 20% of the picks in any one industry
 
 # 4a. Greenblatt's Magic Formula (EBIT/EV + return on capital, no financials/utilities)
 lti backtest --magic-formula --top-n 30 --start 2013-01-01
@@ -273,6 +274,26 @@ April — tax is paid when the gain is realized, which is slightly conservative.
 rerun with `--cost-bps 0` to reproduce them. The factor study's backtests stay gross, as
 registered.
 
+### Industry concentration, and a cap on it
+
+A screen can rank well on every metric and still be one bet on one industry: the factor
+study's final screen, below, came out as a portfolio of shrinking retailers and telecoms.
+So every backtest now records the largest industry in the portfolio at each rebalance
+(`top_industry`, `top_industry_share`; `port_top_industry_share` averages it), and
+`--industry-cap` (*Most in one industry* on the Backtest and Rolling pages) limits it:
+walking down the ranking, a name whose industry already fills its share is passed over for
+the next one. With equal weights the cap is a count — `--top-n 30 --industry-cap 0.2` allows
+6 names per industry — and never below one.
+
+Industries are Fama and French's 12, from SIC codes (`lti.sectors.industry`): Consumer
+Non-Durables, Consumer Durables, Manufacturing, Energy, Chemicals, Business Equipment,
+Telecom, Utilities, Shops, Health, Finance and Other. The SIC *divisions* the Screener shows
+as `sector` are too coarse for this — Manufacturing alone is about half the market, drugs,
+chips, cars and food together — so a cap on them would mostly push a portfolio out of
+manufacturing rather than off a theme. A company with no SIC code is never capped. Kept
+holdings under a sell buffer count toward their industry but aren't sold to make room.
+Each holding records its `industry`. Off by default (`industry_cap = None`).
+
 ## GUI
 
 ```bash
@@ -365,7 +386,8 @@ PP&E, interest-bearing debt, as-reported operating income and share counts from 
 Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month** —
 April by default, when calendar-year 10-Ks are in; in January a screen ranks on
 fundamentals a median of a year old — **Min market cap**, **Initial capital**, and the sell
-buffer: **Sell a holding once it drops out of the top** …) and the
+buffer: **Sell a holding once it drops out of the top** …, and **Most in one industry**)
+and the
 **Costs and taxes** (trading cost, taxable account, the three rates, *Sell only after a
 full year* — see [Trading costs and taxes](#trading-costs-and-taxes)); hit **Run backtest**.
 
@@ -380,7 +402,9 @@ Body: equity curve vs SPY and the universe, plus the strategy before costs and t
 Sharpe), full stats table, **What trading and taxes took** (each portfolio's CAGR before
 and after, costs and taxes a year, the CAGR if sold at the end, turnover and the share of
 gains taxed short-term), a **survivorship-bias callout**, per-period
-excess returns against either benchmark, **Does the rebalance month matter?** (the same
+excess returns against either benchmark, **Was it one theme?** (the largest industry's
+share of the portfolio at each rebalance, against the cap if one is set), **Does the
+rebalance month matter?** (the same
 strategy run once per month — with a dozen annual rebalances, the month alone can decide
 whether a screen beats its universe), the per-period summary, a holdings expander (every
 pick with the metric values it was ranked on, + CSV), and a warnings expander. Results
@@ -455,7 +479,8 @@ beat its bottom half by about two points a year. But a **top-30 portfolio of it 
 own universe by 3.6% a year in 2019–25**, ahead in 1 of 12 rebalance months (in-sample,
 2011–18, it had beaten it by 5.0%). The names that score well on all four at once are
 shrinking cash-returners — Macy's, Kohl's, Best Buy, Western Union, Lumen, Sirius — much of
-it in industries in decline, so the portfolio rides one theme. The signals are real across
+it in industries in decline, so the portfolio rides one theme (`--industry-cap`, above, tests
+whether spreading it helps). The signals are real across
 the market; a concentrated screen on them isn't a way to collect them. Caveats: two
 seven-year halves, a survivor-only universe (which flatters distressed stocks and so
 works against Altman Z and quality in the first half), and published factors typically
@@ -687,7 +712,7 @@ src/lti/
   tickers.py       CIK <-> ticker map (primary = the SEC's first-listed security)
   fundamentals.py  build/load the flat fundamentals.parquet + coverage report
   rawtags.py       SIC + debt / PP&E / goodwill / share counts straight from the raw SEC files
-  sectors.py       SIC -> division, and the financials / utilities exclusions
+  sectors.py       SIC -> division and Fama-French industry, and the financials / utilities exclusions
   prices.py        yfinance cache: total-return + split-adjusted panels, split history (resumable)
   metrics.py       P/E, P/B, PEG, EBIT/EV, ROIC, debt/equity, ROE, margins, growth, ...
   history.py       five years of filings, point in time: normalized EPS/FCF, consistency, growth

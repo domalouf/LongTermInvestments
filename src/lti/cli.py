@@ -92,15 +92,20 @@ def cmd_progress(args: argparse.Namespace) -> None:
 
 
 def _friction_kwargs(args: argparse.Namespace) -> dict:
-    """The turnover, cost and tax flags, as BacktestConfig / RollingConfig fields."""
+    """The portfolio-construction, cost and tax flags, as BacktestConfig / RollingConfig fields."""
     from lti.frictions import TaxRates
 
     if args.sell_rank is not None and args.sell_rank < args.top_n:
         raise SystemExit(f"--sell-rank ({args.sell_rank}) must be at least --top-n ({args.top_n})")
+    if args.industry_cap is not None and not 0 < args.industry_cap <= 1:
+        raise SystemExit(f"--industry-cap ({args.industry_cap}) is a share of the portfolio, in (0, 1]")
     tax = None
     if args.taxable:
         tax = TaxRates(short_term=args.short_term_tax, long_term=args.long_term_tax, dividends=args.dividend_tax)
-    return dict(cost_bps=args.cost_bps, tax=tax, hold_past_one_year=args.hold_past_year, sell_rank=args.sell_rank)
+    return dict(
+        cost_bps=args.cost_bps, tax=tax, hold_past_one_year=args.hold_past_year,
+        sell_rank=args.sell_rank, industry_cap=args.industry_cap,
+    )
 
 
 def _add_friction_args(p: argparse.ArgumentParser) -> None:
@@ -111,6 +116,10 @@ def _add_friction_args(p: argparse.ArgumentParser) -> None:
         "--sell-rank", type=int, default=None,
         help="keep a holding until it drops out of the top SELL_RANK, not the top N: a buffer "
              "against turnover (e.g. --top-n 30 --sell-rank 60; default: no buffer)",
+    )
+    p.add_argument(
+        "--industry-cap", type=float, default=None,
+        help="at most this share of the picks in one Fama-French industry, e.g. 0.2 (default: no cap)",
     )
     p.add_argument(
         "--cost-bps", type=float, default=DEFAULT_COST_BPS,
@@ -156,6 +165,7 @@ def _screen_from_json(path: str):
         tax=TaxRates(**raw["tax"]) if raw.get("tax") else None,
         hold_past_one_year=raw.get("hold_past_one_year", False),
         sell_rank=raw.get("sell_rank"),
+        industry_cap=raw.get("industry_cap"),
     )
 
 

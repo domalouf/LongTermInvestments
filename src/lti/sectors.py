@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+import numpy as np
 import pandas as pd
 
 # SIC divisions, as published by the SEC. (low, high, label) — inclusive.
@@ -26,6 +27,28 @@ _DIVISIONS: list[tuple[int, int, str]] = [
     (7000, 8999, "Services"),
     (9100, 9729, "Public Administration"),
 ]
+
+# Fama and French's 12 industries (Ken French's Siccodes12): fine enough to show a
+# theme, where the divisions above can't — "Manufacturing" is half the market,
+# drugs, chips, cars and food alike. A code in none of these ranges is "Other":
+# mines, construction, transport, hotels, business services, entertainment.
+_FF12: list[tuple[str, list[tuple[int, int]]]] = [
+    ("Consumer Non-Durables", [(100, 999), (2000, 2399), (2700, 2749), (2770, 2799), (3100, 3199), (3940, 3989)]),
+    ("Consumer Durables", [(2500, 2519), (2590, 2599), (3630, 3659), (3710, 3711), (3714, 3714), (3716, 3716),
+                           (3750, 3751), (3792, 3792), (3900, 3939), (3990, 3999)]),
+    ("Manufacturing", [(2520, 2589), (2600, 2699), (2750, 2769), (3000, 3099), (3200, 3569), (3580, 3629),
+                       (3700, 3709), (3712, 3713), (3715, 3715), (3717, 3749), (3752, 3791), (3793, 3799),
+                       (3830, 3839), (3860, 3899)]),
+    ("Energy", [(1200, 1399), (2900, 2999)]),
+    ("Chemicals", [(2800, 2829), (2840, 2899)]),
+    ("Business Equipment", [(3570, 3579), (3660, 3692), (3694, 3699), (3810, 3829), (7370, 7379)]),
+    ("Telecom", [(4800, 4899)]),
+    ("Utilities", [(4900, 4949)]),
+    ("Shops", [(5000, 5999), (7200, 7299), (7600, 7699)]),
+    ("Health", [(2830, 2839), (3693, 3693), (3840, 3859), (8000, 8099)]),
+    ("Finance", [(6000, 6999)]),
+]
+OTHER_INDUSTRY = "Other"
 
 FINANCIALS_RANGE = (6000, 6799)
 UTILITIES_RANGE = (4900, 4999)
@@ -52,6 +75,17 @@ def sic_division(sic: pd.Series) -> pd.Series:
         # of whichever division happened to be tested last
         out = out.mask(codes.between(low, high).fillna(False).astype(bool), label)
     return out
+
+
+def industry(sic: pd.Series) -> pd.Series:
+    """Map SIC codes to their Fama-French industry (one of 12); missing codes give NA."""
+    codes = pd.to_numeric(sic, errors="coerce").astype("float64").to_numpy()
+    out = np.full(len(codes), OTHER_INDUSTRY, dtype=object)
+    for label, ranges in _FF12:
+        for low, high in ranges:
+            out[(codes >= low) & (codes <= high)] = label
+    out[np.isnan(codes)] = None
+    return pd.Series(out, index=sic.index, dtype="string")
 
 
 def is_financial(sic: pd.Series) -> pd.Series:

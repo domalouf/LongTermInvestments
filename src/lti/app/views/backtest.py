@@ -42,6 +42,7 @@ def _config(cfg_key: str) -> BacktestConfig:
         market_cap_min=raw["market_cap_min"],
         initial_capital=raw["initial_capital"],
         sell_rank=raw.get("sell_rank"),
+        industry_cap=raw.get("industry_cap"),
         **widgets.friction_kwargs(raw["frictions"]),
     )
 
@@ -72,6 +73,7 @@ with st.sidebar:
     chosen, coverage = widgets.rank_by(["pe", "debt_to_equity"], magic=magic)
     top_n = st.slider("Top N", 5, 50, 30 if magic else 10)
     sell_rank = widgets.sell_rank(top_n)
+    industry_cap = widgets.industry_cap()
     start = st.text_input("Start", "2013-01-01")
     end = st.text_input("End", "2024-01-01")
     rebal_month = st.slider(
@@ -102,6 +104,7 @@ cfg_key = json.dumps(
         "filters": {"exclude_financials": excl_fin, "exclude_utilities": excl_util},
         "min_coverage": coverage,
         "sell_rank": sell_rank,
+        "industry_cap": industry_cap,
         "frictions": fric,
     }
 )
@@ -308,6 +311,36 @@ if not period_summary.empty:
     theme.show(
         fig2, height=300, legend=False,
         yaxis=dict(tickformat="+.0%", title=f"strategy − {label}, that period"),
+        xaxis=dict(title="", dtick=1),
+    )
+
+if not period_summary.empty and period_summary["top_industry_share"].notna().any():
+    st.header("Was it one theme?")
+    ps = period_summary.dropna(subset=["top_industry_share"]).copy()
+    ps["year"] = pd.to_datetime(ps["rebalance_date"]).dt.year
+    fig_ind = go.Figure(
+        go.Bar(
+            x=ps["year"], y=ps["top_industry_share"], customdata=ps["top_industry"],
+            hovertemplate="%{x}: %{customdata}, %{y:.0%} of the picks<extra></extra>",
+        )
+    )
+    theme.bar_marks(fig_ind)
+    if industry_cap:
+        theme.zero_line(fig_ind, axis="y", value=industry_cap)
+    common = ps["top_industry"].mode()
+    theme.note(
+        f"The largest industry in the portfolio at each rebalance — on average <b>{ps['top_industry_share'].mean():.0%}"
+        f"</b> of it, most often {common.iloc[0] if len(common) else '—'}. A screen can rank well on every "
+        "metric and still be one bet on one industry. "
+        + (
+            f"The line is the cap: at most {industry_cap:.0%} in any one."
+            if industry_cap
+            else "<i>Most in one industry</i> in the sidebar caps it."
+        )
+    )
+    theme.show(
+        fig_ind, height=280, legend=False,
+        yaxis=dict(tickformat=".0%", title="largest industry's share", rangemode="tozero"),
         xaxis=dict(title="", dtick=1),
     )
 

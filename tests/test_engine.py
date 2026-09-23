@@ -414,19 +414,76 @@ def test_holding_past_a_year_makes_every_gain_long_term(fund, px):
     assert (dates.dt.month == 4).all()  # it drifts a few days a year, not out of the month
 
 
-def test_buffered_picks_keep_holdings_until_they_leave_the_buffer():
+def test_a_sell_buffer_keeps_holdings_until_they_leave_it():
     ranked = pd.DataFrame({"ticker": ["A", "B", "C", "D", "E", "F"], "composite_score": np.linspace(0.1, 0.9, 6)})
 
+    def pick(held, sell_rank, top_n=2):
+        return ranking.select_holdings(ranked, top_n, held=held, sell_rank=sell_rank)
+
     # no buffer to speak of: exactly the top N
-    assert ranking.buffered_picks(ranked, 2, ["E", "F"], 2) == ranking.top_picks(ranked, 2) == ["A", "B"]
+    assert pick(["E", "F"], 2) == ranking.top_picks(ranked, 2) == ["A", "B"]
     # E still ranks inside the top 5, so it stays; the one free place goes to the best name not held
-    assert ranking.buffered_picks(ranked, 2, ["E", "F"], 5) == ["A", "E"]
+    assert pick(["E", "F"], 5) == ["A", "E"]
     # both inside the buffer: nothing is traded
-    assert ranking.buffered_picks(ranked, 2, ["D", "E"], 5) == ["D", "E"]
+    assert pick(["D", "E"], 5) == ["D", "E"]
     # a holding that left the universe altogether is sold
-    assert ranking.buffered_picks(ranked, 2, ["Z", "C"], 4) == ["A", "C"]
+    assert pick(["Z", "C"], 4) == ["A", "C"]
     with pytest.raises(ValueError):
-        ranking.buffered_picks(ranked, 3, [], 2)
+        pick([], 2, top_n=3)
+
+
+def test_an_industry_cap_passes_over_names_whose_industry_is_full():
+    ranked = pd.DataFrame(
+        {
+            "ticker": ["A", "B", "C", "D", "E", "F"],
+            "industry": ["Shops", "Shops", "Shops", "Telecom", None, "Health"],
+        }
+    )
+
+    def pick(top_n, cap, **kw):
+        return ranking.select_holdings(ranked, top_n, group="industry", max_per_group=cap, **kw)
+
+    assert pick(4, 2) == ["A", "B", "D", "E"]  # C would be a third Shops name
+    assert pick(4, 1) == ["A", "D", "E", "F"]
+    assert pick(3, None) == ranking.top_picks(ranked, 3)  # no cap: the plain top N
+    # a name with no industry is never capped
+    assert pick(6, 1) == ["A", "D", "E", "F"]
+    # kept holdings count toward their industry, but aren't sold to make room
+    assert pick(3, 1, held=["B", "C"], sell_rank=6) == ["B", "C", "D"]
+
+
+def test_industries_follow_fama_french():
+    from lti.sectors import OTHER_INDUSTRY, industry
+
+    codes = pd.Series([5311, 5731, 4813, 2834, 3674, 7372, 3711, 1311, 4911, 4953, 2080, None], dtype="Int64")
+    assert industry(codes).tolist() == [
+        "Shops", "Shops", "Telecom", "Health", "Business Equipment", "Business Equipment",
+        "Consumer Durables", "Energy", "Utilities", OTHER_INDUSTRY, "Consumer Non-Durables", pd.NA,
+    ]
+
+
+def test_an_industry_cap_spreads_a_one_industry_screen(fund, px):
+    # the three least-levered companies are all retailers
+    world = fund.assign(sic=np.where(fund["cik"] <= 3, 5311, 2834 + fund["cik"]))
+    cfg = BacktestConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=4), start="2012-01-01", end="2021-01-01",
+        market_cap_min=0.0, cost_bps=0.0,
+    )
+    plain = run_backtest(cfg, fund=world, px=px)
+    capped = run_backtest(dataclasses.replace(cfg, industry_cap=0.5), fund=world, px=px)
+
+    assert (plain.period_summary["top_industry"] == "Shops").all()
+    assert (plain.period_summary["top_industry_share"] == 0.75).all()
+    assert (capped.period_summary["top_industry_share"] == 0.5).all()
+    assert capped.stats["port_top_industry_share"] == 0.5
+    assert (capped.period_summary["n_selected"] == 4).all()  # the place goes to the next name down
+    assert set(capped.holdings["ticker"]) == {"T1", "T2", "T4", "T5"}
+    assert capped.holdings.groupby(["rebalance_date", "industry"]).size().max() == 2
+
+    with pytest.raises(ValueError):
+        run_backtest(dataclasses.replace(cfg, industry_cap=1.5), fund=world, px=px)
+    with pytest.raises(KeyError):  # no SIC codes to cap by
+        run_backtest(dataclasses.replace(cfg, industry_cap=0.5), fund=fund, px=px)
 
 
 def test_a_sell_buffer_trades_less_when_the_ranking_churns(fund, px):
