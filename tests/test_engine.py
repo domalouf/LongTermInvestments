@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -354,3 +356,220 @@ def test_performance_helpers():
     assert mdd == pytest.approx(-90 / 110 + 1 - 1, rel=1e-6) or mdd < 0
     assert peak < trough
     assert np.isfinite(sharpe(curve))
+
+
+def _frictions_cfg(**kw) -> BacktestConfig:
+    return BacktestConfig(
+        screen=ScreenSpec(metrics=["pe", "debt_to_equity"], top_n=3),
+        start="2012-01-01", end="2021-01-01", market_cap_min=0.0, **kw,
+    )
+
+
+def test_a_frictionless_backtest_is_the_gross_one(fund, px):
+    r = run_backtest(_frictions_cfg(cost_bps=0.0), fund=fund, px=px)
+    assert r.equity_curve.equals(r.equity_curve_gross)
+    for leg in ("port", "univ", "bench"):
+        assert r.stats[f"{leg}_cagr"] == r.stats[f"{leg}_cagr_gross"] == r.stats[f"{leg}_cagr_liquidated"]
+        assert r.stats[f"{leg}_costs_pa"] == r.stats[f"{leg}_taxes_pa"] == 0.0
+    assert (r.period_summary["port_return"] == r.period_summary["port_return_gross"]).all()
+
+
+def test_costs_and_taxes_come_out_of_all_three(fund, panel):
+    from lti.frictions import TaxRates
+
+    # a 2%-a-year dividend: the price rises more slowly than the total return
+    close = panel.mul(np.exp(-0.02 / 252 * np.arange(len(panel))), axis=0)
+    px = PriceData(adj=panel, close=close, splits=empty_splits())
+    costs = run_backtest(_frictions_cfg(cost_bps=20.0), fund=fund, px=px)
+    taxed = run_backtest(_frictions_cfg(cost_bps=20.0, tax=TaxRates()), fund=fund, px=px)
+
+    for leg in ("port", "univ", "bench"):
+        assert costs.stats[f"{leg}_cagr"] < costs.stats[f"{leg}_cagr_gross"]
+        assert costs.stats[f"{leg}_costs_pa"] > 0 and costs.stats[f"{leg}_taxes_pa"] == 0.0
+        assert taxed.stats[f"{leg}_cagr"] < costs.stats[f"{leg}_cagr"]
+        assert taxed.stats[f"{leg}_taxes_pa"] > 0
+        # selling at the end taxes the gains still unrealized
+        assert taxed.stats[f"{leg}_cagr_liquidated"] < taxed.stats[f"{leg}_cagr"]
+    assert taxed.stats["port_cagr_gross"] == pytest.approx(costs.stats["port_cagr_gross"])
+    assert taxed.equity_curve.iloc[0] == taxed.equity_curve_gross.iloc[0] == 100_000.0
+    # each period's net return is what the curve did between rebalances
+    ps = taxed.period_summary
+    curve = taxed.equity_curve
+    assert ps.loc[1, "port_return"] == pytest.approx(curve[ps.loc[1, "exit_date"]] / curve[ps.loc[1, "rebalance_date"]] - 1)
+    assert (ps["costs"] > 0).all() and (ps["taxes"] > 0).all()
+    assert ps.loc[0, "turnover"] == pytest.approx(0.5, abs=0.01)  # the first date only buys
+
+
+def test_holding_past_a_year_makes_every_gain_long_term(fund, px):
+    from lti.frictions import TaxRates
+
+    calendar = run_backtest(_frictions_cfg(tax=TaxRates()), fund=fund, px=px)
+    patient = run_backtest(_frictions_cfg(tax=TaxRates(), hold_past_one_year=True), fund=fund, px=px)
+
+    # the first trading day of April falls a year to the day, or less, after the last one in some years
+    assert calendar.stats["port_short_term_share"] > 0
+    assert patient.stats["port_short_term_share"] == 0.0
+    dates = pd.to_datetime(patient.period_summary["rebalance_date"])
+    assert all(b > a + pd.DateOffset(years=1) for a, b in zip(dates[:-1], dates[1:]))
+    assert (dates.dt.month == 4).all()  # it drifts a few days a year, not out of the month
+
+
+def test_a_sell_buffer_keeps_holdings_until_they_leave_it():
+    ranked = pd.DataFrame({"ticker": ["A", "B", "C", "D", "E", "F"], "composite_score": np.linspace(0.1, 0.9, 6)})
+
+    def pick(held, sell_rank, top_n=2):
+        return ranking.select_holdings(ranked, top_n, held=held, sell_rank=sell_rank)
+
+    # no buffer to speak of: exactly the top N
+    assert pick(["E", "F"], 2) == ranking.top_picks(ranked, 2) == ["A", "B"]
+    # E still ranks inside the top 5, so it stays; the one free place goes to the best name not held
+    assert pick(["E", "F"], 5) == ["A", "E"]
+    # both inside the buffer: nothing is traded
+    assert pick(["D", "E"], 5) == ["D", "E"]
+    # a holding that left the universe altogether is sold
+    assert pick(["Z", "C"], 4) == ["A", "C"]
+    with pytest.raises(ValueError):
+        pick([], 2, top_n=3)
+
+
+def test_an_industry_cap_passes_over_names_whose_industry_is_full():
+    ranked = pd.DataFrame(
+        {
+            "ticker": ["A", "B", "C", "D", "E", "F"],
+            "industry": ["Shops", "Shops", "Shops", "Telecom", None, "Health"],
+        }
+    )
+
+    def pick(top_n, cap, **kw):
+        return ranking.select_holdings(ranked, top_n, group="industry", max_per_group=cap, **kw)
+
+    assert pick(4, 2) == ["A", "B", "D", "E"]  # C would be a third Shops name
+    assert pick(4, 1) == ["A", "D", "E", "F"]
+    assert pick(3, None) == ranking.top_picks(ranked, 3)  # no cap: the plain top N
+    # a name with no industry is never capped
+    assert pick(6, 1) == ["A", "D", "E", "F"]
+    # kept holdings count toward their industry, but aren't sold to make room
+    assert pick(3, 1, held=["B", "C"], sell_rank=6) == ["B", "C", "D"]
+
+
+def test_industries_follow_fama_french():
+    from lti.sectors import OTHER_INDUSTRY, industry
+
+    codes = pd.Series([5311, 5731, 4813, 2834, 3674, 7372, 3711, 1311, 4911, 4953, 2080, None], dtype="Int64")
+    assert industry(codes).tolist() == [
+        "Shops", "Shops", "Telecom", "Health", "Business Equipment", "Business Equipment",
+        "Consumer Durables", "Energy", "Utilities", OTHER_INDUSTRY, "Consumer Non-Durables", pd.NA,
+    ]
+
+
+def test_an_industry_cap_spreads_a_one_industry_screen(fund, px):
+    # the three least-levered companies are all retailers
+    world = fund.assign(sic=np.where(fund["cik"] <= 3, 5311, 2834 + fund["cik"]))
+    cfg = BacktestConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=4), start="2012-01-01", end="2021-01-01",
+        market_cap_min=0.0, cost_bps=0.0,
+    )
+    plain = run_backtest(cfg, fund=world, px=px)
+    capped = run_backtest(dataclasses.replace(cfg, industry_cap=0.5), fund=world, px=px)
+
+    assert (plain.period_summary["top_industry"] == "Shops").all()
+    assert (plain.period_summary["top_industry_share"] == 0.75).all()
+    assert (capped.period_summary["top_industry_share"] == 0.5).all()
+    assert capped.stats["port_top_industry_share"] == 0.5
+    assert (capped.period_summary["n_selected"] == 4).all()  # the place goes to the next name down
+    assert set(capped.holdings["ticker"]) == {"T1", "T2", "T4", "T5"}
+    assert capped.holdings.groupby(["rebalance_date", "industry"]).size().max() == 2
+
+    with pytest.raises(ValueError):
+        run_backtest(dataclasses.replace(cfg, industry_cap=1.5), fund=world, px=px)
+    with pytest.raises(KeyError):  # no SIC codes to cap by
+        run_backtest(dataclasses.replace(cfg, industry_cap=0.5), fund=fund, px=px)
+
+
+def test_a_sell_buffer_trades_less_when_the_ranking_churns(fund, px):
+    # debt/equity rotates a place a year, so the cheapest two change every year
+    churn = fund.assign(liabilities=200 + ((fund["cik"] + fund["fiscal_year"]) % 6) * 30)
+    cfg = BacktestConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=2), start="2012-01-01", end="2021-01-01", market_cap_min=0.0
+    )
+    plain = run_backtest(cfg, fund=churn, px=px)
+    buffered = run_backtest(dataclasses.replace(cfg, sell_rank=4), fund=churn, px=px)
+
+    assert run_backtest(dataclasses.replace(cfg, sell_rank=2), fund=churn, px=px).holdings.equals(plain.holdings)
+    later = slice(1, None)  # the first rebalance only buys
+    assert buffered.period_summary["turnover"][later].mean() < plain.period_summary["turnover"][later].mean()
+    assert buffered.period_summary["n_held_over"][later].sum() > plain.period_summary["n_held_over"][later].sum()
+    assert buffered.stats["port_costs_pa"] < plain.stats["port_costs_pa"]
+    assert (buffered.period_summary["n_selected"] == 2).all()
+    # a kept name can rank below the top N, never below the buffer
+    assert buffered.holdings["rank"].max() <= 4 and plain.holdings["rank"].max() <= 2
+    assert buffered.holdings.loc[buffered.holdings["rank"] > 2, "held_over"].all()
+
+    with pytest.raises(ValueError):
+        run_backtest(dataclasses.replace(cfg, sell_rank=1), fund=churn, px=px)
+
+
+def test_dated_valuations_discount_at_the_rates_of_their_date(fund, panel):
+    from lti.valuation import market_assumptions, rank_undervalued
+
+    cheap = panel.copy()
+    for c in [c for c in cheap.columns if c != "SPY"]:
+        cheap[c] = cheap[c] * 0.02
+    days = pd.bdate_range("2019-01-01", "2020-12-31")
+    low = pd.DataFrame({"treasury_10y": 0.01, "aaa": 0.025}, index=pd.DatetimeIndex(days, name="date"))
+    high = low.assign(treasury_10y=0.06, aaa=0.07)
+
+    def upside(rates):
+        px = PriceData(cheap, cheap, empty_splits(), rates=rates)
+        ranked = rank_undervalued(fund, px, "2020-06-01", market_cap_min=0.0, min_models=2, max_upside=None, top_n=None)
+        snap = pit.priced_snapshot(fund, "2020-06-01", px, with_history=True)
+        return ranked.set_index("ticker")["fair_value_est_upside"], snap.set_index("ticker")["fair_value_upside"]
+
+    listed_low, metric_low = upside(low)
+    listed_high, metric_high = upside(high)
+    listed_fixed, metric_fixed = upside(PriceData(panel, panel, empty_splits()).rates)  # none cached
+
+    def higher(a, b):  # on the names both lists hold — the upside floor moves with the rates
+        both = a.dropna().index.intersection(b.dropna().index)
+        return len(both) > 0 and bool((a[both] > b[both]).all())
+
+    # cheaper money, higher fair values — in the published list and in the backtest metric alike
+    assert higher(listed_low, listed_fixed) and higher(listed_fixed, listed_high)
+    assert higher(metric_low, metric_high)
+    assert len(listed_low) >= len(listed_high)  # and more names clear the positive-upside floor
+    # nothing cached is the fixed 9% of before
+    assert market_assumptions("2020-06-01", PriceData(panel, panel, empty_splits()).rates).discount_rate == 0.09
+
+
+def test_a_backtest_can_be_attributed_to_factors(fund, px):
+    from lti import attribution
+
+    r = run_backtest(_frictions_cfg(cost_bps=0.0), fund=fund, px=px)
+    months = pd.date_range("2011-01-31", "2021-06-30", freq="ME")
+    rng = np.random.default_rng(0)
+    factors = pd.DataFrame(rng.normal(0, 0.03, (len(months), 6)), index=months,
+                           columns=["mkt_rf", "smb", "hml", "rmw", "cma", "mom"]).assign(rf=0.0)
+    a = attribution.attribute(r, factors)
+    # every month of the backtest between its first and last rebalance, whole months only
+    assert a.n["Strategy"] == len(attribution.monthly_returns(r.equity_curve)) > 90
+    assert a.coef.notna().all().all()
+    assert a.months[0] == pd.Timestamp("2012-04-30")
+
+
+def test_a_backtest_ranks_on_the_latest_10q_unless_told_not_to(fund, px):
+    # a trailing-twelve-month row per company each May, with debt/equity the other way round
+    ttm = fund.assign(
+        form="10-Q", basis="ttm",
+        period_end=lambda d: pd.to_datetime((d["fiscal_year"] + 1).astype(str) + "-03-31"),
+        filed=lambda d: pd.to_datetime((d["fiscal_year"] + 1).astype(str) + "-05-01"),
+        liabilities=lambda d: 200 + (7 - d["cik"]) * 30,
+    )
+    both = pd.concat([fund.assign(form="10-K"), ttm], ignore_index=True)
+    cfg = BacktestConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=2), start="2013-01-01", end="2020-01-01",
+        market_cap_min=0.0, rebalance_month=7, cost_bps=0.0,
+    )
+    fresh = run_backtest(cfg, fund=both, px=px)
+    yearly = run_backtest(dataclasses.replace(cfg, quarterly=False), fund=both, px=px)
+    assert set(fresh.holdings["ticker"]) == {"T5", "T6"}  # the least levered by the 10-Qs
+    assert set(yearly.holdings["ticker"]) == {"T1", "T2"}  # and by the 10-Ks

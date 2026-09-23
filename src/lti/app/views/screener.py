@@ -9,6 +9,7 @@ import streamlit as st
 from lti import pit, prices as prices_mod, ranking
 from lti.app import theme, widgets
 from lti.metrics import HISTORY_METRICS, LOWER_IS_BETTER, PRICE_METRICS, VALUATION_METRICS
+from lti.sectors import DIVISION_SHORT
 
 theme.header(
     "🔎 Screener",
@@ -92,15 +93,21 @@ except KeyError as exc:
 
 ranked_metrics = [m for m in chosen if m in ranked.columns]
 
-s = st.columns(4)
+s = st.columns([1, 1, 1, 1.7])  # the sector's name needs the room
 s[0].metric("Pass the filters", f"{len(ranked):,}",
             help=f"The table below shows the top {min(top_n, len(ranked))}.")
 s[1].metric("Ranked on", f"{len(ranked_metrics)} metric{'s' if len(ranked_metrics) != 1 else ''}")
 if "market_cap" in ranked.columns and ranked["market_cap"].notna().any():
     s[2].metric("Median pick size", theme.money(ranked["market_cap"].head(top_n).median()))
 if "sector" in ranked.columns:
-    top_sector = ranked["sector"].head(top_n).mode()
-    s[3].metric("Most common sector", str(top_sector.iloc[0]) if len(top_sector) else "—")
+    shown = ranked["sector"].head(top_n)
+    top_sector = shown.mode()
+    if len(top_sector):
+        name = str(top_sector.iloc[0])
+        s[3].metric("Most common sector", DIVISION_SHORT.get(name, name),
+                    help=f"{name}: {int((shown == name).sum())} of the top {len(shown)}.")
+    else:
+        s[3].metric("Most common sector", "—")
 
 # per-metric percentile rank (0% = best) so a multi-metric composite is legible
 pct_cols: list[str] = []
@@ -112,7 +119,7 @@ if len(ranked_metrics) > 1:
 
 display_cols = [
     c
-    for c in ["rank", "ticker", "company", "sector", "fiscal_year", "filed", "price", "market_cap",
+    for c in ["rank", "ticker", "company", "sector", "form", "fiscal_year", "filed", "price", "market_cap",
               *ranked_metrics, *pct_cols, "composite_score"]
     if c in ranked.columns
 ]
@@ -123,6 +130,9 @@ col_cfg = {
     "ticker": st.column_config.TextColumn("Ticker", width="small"),
     "company": st.column_config.TextColumn("Company", width="medium"),
     "sector": st.column_config.TextColumn("Sector", width="medium"),
+    "form": st.column_config.TextColumn(
+        "From", width="small",
+        help="10-K: the fiscal year. 10-Q: the trailing twelve months to the latest quarter — see `lti build-quarterly`."),
     "fiscal_year": st.column_config.NumberColumn("FY", format="%d"),
     "filed": st.column_config.DateColumn("Filed", format="YYYY-MM-DD"),
     "price": st.column_config.NumberColumn("Price", format="$%.2f"),
@@ -203,13 +213,13 @@ else:
     from lti.valuation import ValuationAssumptions, add_valuation_models
 
     fv1, fv2 = st.columns(2)
-    disc = fv1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+    rate_kw = widgets.rates(asof_ts, fv1)
     gcap = fv2.slider("Max growth", 0.05, 0.30, 0.15, 0.01, format="%.2f")
     picks_snap = ranked.head(top_n)
     basis = "normalized" if "eps_norm" in picks_snap.columns else "latest"
     v = add_valuation_models(
         picks_snap, picks_snap["price"],
-        assumptions=ValuationAssumptions(discount_rate=disc, growth_cap=gcap),
+        assumptions=ValuationAssumptions(**rate_kw, growth_cap=gcap),
         basis=basis,
     )
     from lti.valuation import MODELS
@@ -220,7 +230,9 @@ else:
     fmt = {"price": "${:,.2f}", "eps_norm": "${:,.2f}", "profit_years": "{:.0f}",
            "est_growth": "{:.0%}", "fair_value_est": "${:,.2f}"}
     fmt.update({c: "{:+.0%}" for c in fv_table.columns if c.endswith("_upside")})
-    st.dataframe(fv_table.style.format(fmt, na_rep="—"), hide_index=True, width="stretch")
+    # a static table: the interactive grid draws a missing value as "None" whatever the
+    # Styler says, and a model that produced no value is common enough to matter here
+    st.table(fv_table.set_index("ticker").style.format(fmt, na_rep="—"))
     st.caption(
         "`*_upside` = model fair value ÷ price − 1. Blended `fair_value_est` is the median of the "
         "models that produced a number. The models run on normalized earnings — `eps_norm`, the "

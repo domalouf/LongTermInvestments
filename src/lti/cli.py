@@ -45,8 +45,22 @@ def cmd_build_fundamentals(args: argparse.Namespace) -> None:
     if quarters:
         quarters = [q if q.endswith(".zip") else f"{q}.zip" for q in quarters]
     path = fundamentals.build_fundamentals(smoke=args.smoke, quarters=quarters)
-    print("wrote", path)
+    print("wrote", path, "and", config.get_paths().quarterly_parquet)
     fundamentals.coverage_report(fundamentals.load_fundamentals())
+
+
+def cmd_build_quarterly(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import fundamentals
+
+    quarters = args.quarters.split(",") if args.quarters else None
+    if quarters:
+        quarters = [q if q.endswith(".zip") else f"{q}.zip" for q in quarters]
+    path = fundamentals.build_quarterly_table(smoke=args.smoke, quarters=quarters)
+    rows = pd.read_parquet(path)
+    print(f"wrote {path}: {len(rows):,} trailing-twelve-month rows from 10-Qs, "
+          f"{rows['cik'].nunique():,} companies" if len(rows) else f"wrote {path}: no usable 10-Qs")
 
 
 def cmd_refresh_tickers(args: argparse.Namespace) -> None:
@@ -66,6 +80,11 @@ def cmd_fetch_prices(args: argparse.Namespace) -> None:
         wanted.append(args.benchmark)
     else:
         wanted = fundamentals.price_universe(fundamentals.load_fundamentals()) + [args.benchmark]
+    if not args.smoke:
+        from lti import portfolio
+
+        # whatever you own gets priced too — an index fund isn't in the screening universe
+        wanted += [t for t in portfolio.ledger_tickers() if t not in wanted]
 
     prices.fetch_prices(wanted, start=args.start, batch_size=args.batch_size, force=args.force)
     report = prices.missing_report(wanted)
@@ -77,6 +96,48 @@ def cmd_refresh_prices(args: argparse.Namespace) -> None:
 
     tickers = list(config.SMOKE_TICKERS) + ["SPY"] if args.smoke else None
     prices.refresh_prices(tickers, lookback_days=args.lookback_days, batch_size=args.batch_size)
+
+
+def cmd_fetch_rates(args: argparse.Namespace) -> None:
+    from lti import rates
+
+    try:
+        table = rates.fetch_rates()
+    except RuntimeError as exc:
+        raise SystemExit(f"lti fetch-rates: {exc}") from None
+    for col, sid in rates.FRED_SERIES.items():
+        s = table[col].dropna()
+        if s.empty:
+            print(f"  {col} ({sid}): nothing cached")
+        else:
+            print(f"  {col} ({sid}): {len(s):,} days, {s.index.min().date()} to {s.index.max().date()}, "
+                  f"latest {s.iloc[-1]:.2%}")
+
+
+def cmd_fetch_factors(args: argparse.Namespace) -> None:
+    from lti import attribution
+
+    try:
+        table = attribution.fetch_factors()
+    except RuntimeError as exc:
+        raise SystemExit(f"lti fetch-factors: {exc}") from None
+    print(f"  {', '.join(table.columns)}: {len(table):,} months, "
+          f"{table.index.min():%Y-%m} to {table.index.max():%Y-%m}")
+
+
+def _print_attribution(result, model: str) -> None:
+    from lti import attribution
+
+    try:
+        a = attribution.attribute(result, attribution.load_factors(), model)
+    except ValueError as exc:
+        print(f"\n(no factor regression: {exc})")
+        return
+    span = f", {a.months[0]:%Y-%m} to {a.months[1]:%Y-%m}" if a.months else ""
+    print(f"\n=== skill or style: {attribution.MODEL_LABELS[model]}{span} ===")
+    print("(loadings with Newey-West t-stats; alpha is what the factors leave unexplained, a year)")
+    print(attribution.as_text(a).to_string())
+    _print_warnings(a.warnings)
 
 
 def cmd_coverage(args: argparse.Namespace) -> None:
@@ -91,8 +152,60 @@ def cmd_progress(args: argparse.Namespace) -> None:
     print(progress.render())
 
 
+def _friction_kwargs(args: argparse.Namespace) -> dict:
+    """The portfolio-construction, cost and tax flags, as BacktestConfig / RollingConfig fields."""
+    from lti.frictions import TaxRates
+
+    if args.sell_rank is not None and args.sell_rank < args.top_n:
+        raise SystemExit(f"--sell-rank ({args.sell_rank}) must be at least --top-n ({args.top_n})")
+    if args.industry_cap is not None and not 0 < args.industry_cap <= 1:
+        raise SystemExit(f"--industry-cap ({args.industry_cap}) is a share of the portfolio, in (0, 1]")
+    tax = None
+    if args.taxable:
+        tax = TaxRates(short_term=args.short_term_tax, long_term=args.long_term_tax, dividends=args.dividend_tax)
+    return dict(
+        cost_bps=args.cost_bps, tax=tax, hold_past_one_year=args.hold_past_year,
+        sell_rank=args.sell_rank, industry_cap=args.industry_cap, quarterly=not args.annual_only,
+    )
+
+
+def _add_friction_args(p: argparse.ArgumentParser) -> None:
+    from lti.frictions import DEFAULT_COST_BPS, TaxRates
+
+    rates = TaxRates()
+    p.add_argument(
+        "--sell-rank", type=int, default=None,
+        help="keep a holding until it drops out of the top SELL_RANK, not the top N: a buffer "
+             "against turnover (e.g. --top-n 30 --sell-rank 60; default: no buffer)",
+    )
+    p.add_argument(
+        "--annual-only", action="store_true",
+        help="rank on 10-Ks alone, ignoring the trailing-twelve-month rows from 10-Qs",
+    )
+    p.add_argument(
+        "--industry-cap", type=float, default=None,
+        help="at most this share of the picks in one Fama-French industry, e.g. 0.2 (default: no cap)",
+    )
+    p.add_argument(
+        "--cost-bps", type=float, default=DEFAULT_COST_BPS,
+        help=f"trading cost per dollar traded, one way, in basis points (default {DEFAULT_COST_BPS:g}; 0 = gross)",
+    )
+    p.add_argument("--taxable", action="store_true", help="a taxable account: tax dividends and realized gains")
+    p.add_argument("--short-term-tax", type=float, default=rates.short_term,
+                   help=f"rate on gains held a year or less (default {rates.short_term:g})")
+    p.add_argument("--long-term-tax", type=float, default=rates.long_term,
+                   help=f"rate on gains held longer (default {rates.long_term:g})")
+    p.add_argument("--dividend-tax", type=float, default=rates.dividends,
+                   help=f"rate on dividends (default {rates.dividends:g})")
+    p.add_argument(
+        "--hold-past-year", action="store_true",
+        help="rebalance no sooner than a year and a day after the last time, so every gain is long-term",
+    )
+
+
 def _screen_from_json(path: str):
     from lti.backtest import BacktestConfig
+    from lti.frictions import DEFAULT_COST_BPS, TaxRates
     from lti.ranking import ScreenSpec
 
     raw = json.load(open(path))
@@ -113,6 +226,12 @@ def _screen_from_json(path: str):
         initial_capital=raw.get("initial_capital", 100_000.0),
         market_cap_min=raw.get("market_cap_min", 50_000_000.0),
         operating_only=raw.get("operating_only", True),
+        cost_bps=raw.get("cost_bps", DEFAULT_COST_BPS),
+        tax=TaxRates(**raw["tax"]) if raw.get("tax") else None,
+        hold_past_one_year=raw.get("hold_past_one_year", False),
+        sell_rank=raw.get("sell_rank"),
+        industry_cap=raw.get("industry_cap"),
+        quarterly=raw.get("quarterly", True),
     )
 
 
@@ -138,6 +257,7 @@ def cmd_backtest(args: argparse.Namespace) -> None:
             start=args.start,
             end=args.end,
             rebalance_month=args.rebalance_month,
+            **_friction_kwargs(args),
         )
     if args.all_months:
         spread = rebalance_month_spread(cfg)
@@ -157,6 +277,8 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     print("\n=== period summary ===")
     print(result.period_summary.to_string(index=False))
     _print_warnings(result.warnings)
+    if args.attribution:
+        _print_attribution(result, args.factor_model)
 
 
 def cmd_rolling_backtest(args: argparse.Namespace) -> None:
@@ -170,6 +292,7 @@ def cmd_rolling_backtest(args: argparse.Namespace) -> None:
         start=args.start,
         end=args.end,
         rebalance_month=args.rebalance_month,
+        **_friction_kwargs(args),
     )
     try:
         result = run_rolling_backtest(cfg)
@@ -326,15 +449,96 @@ def cmd_journal(args: argparse.Namespace) -> None:
         print(f"\n{int(scored.sum())} of {len(scored)} scored decisions look right so far (against SPY).")
 
 
+def cmd_portfolio_add(args: argparse.Namespace) -> None:
+    from lti import portfolio
+
+    try:
+        e = portfolio.add_transaction(
+            args.action, ticker=args.ticker, shares=args.shares, price=args.price, amount=args.amount,
+            fees=args.fees, kind=args.kind, note=args.note or "", date=args.date,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"lti portfolio-add: {exc}") from None
+    what = (
+        f"{e['shares']:g} {e['ticker']} at ${e['price']:,.2f}" if e["ticker"] and e["shares"]
+        else f"${e['amount']:,.2f}" + (f" ({e['ticker']})" if e["ticker"] else "")
+    )
+    print(f"logged {e['id']}: {e['action']} {what} on {e['date']}")
+
+
+def cmd_portfolio(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import portfolio, prices
+
+    ledger = portfolio.load_ledger()
+    if ledger.empty:
+        print("the ledger is empty — `lti portfolio-add deposit --amount 10000`, then `lti portfolio-add buy TICKER --shares N`")
+        return
+    try:
+        from lti.fundamentals import load_fundamentals
+
+        stocks = portfolio.stock_tickers(load_fundamentals())
+    except FileNotFoundError:
+        stocks = None
+    acct = portfolio.replay(ledger, prices.load_price_data(), stocks=stocks)
+    s = acct.summary
+
+    def pct(v):
+        return f"{v:+.1%}" if pd.notna(v) else "—"
+
+    def share(v):
+        return f"{v:.1%}" if pd.notna(v) else "—"
+
+    print(f"\n=== portfolio on {s['asof'].date()} ({s['years']:.1f} years since the first money in) ===")
+    print(f"  value          ${s['value']:>14,.2f}   (cash ${s['cash']:,.2f})")
+    print(f"  money in, net  ${s['net_deposits']:>14,.2f}"
+          + (f"   (${s['implicit_deposits']:,.2f} of it counted from buys beyond the cash)" if s["implicit_deposits"] else ""))
+    print(f"  gain           ${s['gain']:>14,.2f}")
+    print(f"  the same money in SPY  ${s['spy_same_flows']:>14,.2f}   -> you are ${s['vs_spy']:+,.2f} against it")
+    print(f"  money-weighted return {pct(s['money_weighted'])} a year, SPY with the same flows {pct(s['spy_money_weighted'])}")
+    print(f"  time-weighted return  {pct(s['time_weighted_pa'])} a year, SPY {pct(s['spy_return_pa'])}")
+    if s["years"] < 1:
+        print("  (under a year in: the yearly rates are an extrapolation — read the dollars)")
+
+    h = acct.holdings.copy()
+    if not h.empty:
+        h = h.sort_values("value", ascending=False)
+        view = pd.DataFrame(
+            {
+                "ticker": h["ticker"], "kind": h["kind"], "shares": h["shares"].round(4),
+                "avg cost": h["avg_cost"].round(2), "price": h["price"].round(2), "value": h["value"].round(2),
+                "weight": h["weight"].map(share), "unrealized": h["unrealized"].round(2),
+                "realized": h["realized"].round(2), "income": h["income"].round(2),
+                "IRR": h["money_weighted"].map(pct), "vs SPY $": h["vs_spy"].round(2),
+            }
+        )
+        print("\n=== holdings (vs SPY: the position against the same buys, sales and dividends in SPY) ===")
+        print(view.to_string(index=False))
+    sl = acct.sleeves
+    print("\n=== picks against funds ===")
+    for r in sl.itertuples(index=False):
+        extra = "" if r.sleeve == "Cash" else f"  IRR {pct(r.money_weighted)}  vs the same money in SPY ${r.vs_spy:+,.2f}"
+        print(f"  {r.sleeve:<18} ${r.value:>12,.2f}  {share(r.weight):>6} of the account{extra}")
+    _print_warnings(acct.warnings)
+
+
 def cmd_undervalued(args: argparse.Namespace) -> None:
     import pandas as pd
 
-    from lti import prices, report
+    from lti import prices, rates, report
     from lti.fundamentals import load_fundamentals
-    from lti.valuation import ValuationAssumptions, rank_undervalued
+    from lti.valuation import ValuationAssumptions, market_assumptions, rank_undervalued
 
     asof = args.asof or pd.Timestamp.today().strftime("%Y-%m-%d")
-    assumptions = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
+    px = prices.load_price_data()
+    if args.discount_rate is not None:
+        assumptions = ValuationAssumptions(discount_rate=args.discount_rate, growth_cap=args.growth_cap)
+    else:
+        # the Treasury on the day plus the premium, where rates are cached; the fixed 9% where not
+        assumptions = market_assumptions(
+            asof, px.rates, ValuationAssumptions(growth_cap=args.growth_cap), args.equity_premium
+        )
     # the screen's arguments double as the metadata the report publishes
     screen = {
         "asof": asof,
@@ -346,10 +550,11 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
         "require_positive_eps": not args.allow_negative_eps,
         "exclude_financials": not args.include_financials,
     }
-    params = {**screen, "discount_rate": args.discount_rate, "growth_cap": args.growth_cap}
-    ranked = rank_undervalued(
-        load_fundamentals(), prices.load_price_data(), assumptions=assumptions, **screen
-    )
+    params = {**screen, "discount_rate": assumptions.discount_rate, "growth_cap": args.growth_cap}
+    treasury = rates.rates_asof(px.rates, asof)["treasury_10y"]
+    if args.discount_rate is None and pd.notna(treasury):
+        params["treasury_10y"] = float(treasury)  # the report says what the rate was built from
+    ranked = rank_undervalued(load_fundamentals(), px, assumptions=assumptions, **screen)
 
     if args.out:
         written = report.write_artifacts(ranked, args.out, asof=asof, params=params)
@@ -452,6 +657,14 @@ def build_parser() -> argparse.ArgumentParser:
     bf.add_argument("--quarters", help="comma-separated, e.g. 2022q1,2022q2")
     bf.set_defaults(func=cmd_build_fundamentals)
 
+    bq = sub.add_parser(
+        "build-quarterly",
+        help="build quarterly.parquet: trailing-twelve-month rows from 10-Qs, without rebuilding the 10-Ks",
+    )
+    bq.add_argument("--smoke", action="store_true")
+    bq.add_argument("--quarters", help="comma-separated, e.g. 2022q1,2022q2 (smoke only)")
+    bq.set_defaults(func=cmd_build_quarterly)
+
     rt = sub.add_parser("refresh-tickers", help="refresh cik->ticker map")
     rt.set_defaults(func=cmd_refresh_tickers)
 
@@ -475,6 +688,15 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--lookback-days", type=int, default=7, help="recent window to re-download")
     rp.add_argument("--batch-size", type=int, default=40)
     rp.set_defaults(func=cmd_refresh_prices)
+
+    fr = sub.add_parser(
+        "fetch-rates",
+        help="cache the 10-year Treasury and AAA corporate yields from FRED, which valuation discounts at",
+    )
+    fr.set_defaults(func=cmd_fetch_rates)
+
+    ff = sub.add_parser("fetch-factors", help="cache the Fama-French factors from Ken French's data library")
+    ff.set_defaults(func=cmd_fetch_factors)
 
     cv = sub.add_parser("coverage", help="print fundamentals coverage report")
     cv.set_defaults(func=cmd_coverage)
@@ -503,6 +725,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bt.add_argument("--exclude-financials", action="store_true", help="drop SIC 6000-6799")
     bt.add_argument("--exclude-utilities", action="store_true", help="drop SIC 4900-4999")
+    bt.add_argument(
+        "--attribution", action="store_true",
+        help="regress the strategy, its universe, the gap between them and SPY on the Fama-French factors "
+             "(`lti fetch-factors` first)",
+    )
+    bt.add_argument("--factor-model", choices=["capm", "ff3", "ff5", "ff5_mom"], default="ff5_mom")
+    _add_friction_args(bt)
     bt.set_defaults(func=cmd_backtest)
 
     rb = sub.add_parser(
@@ -516,6 +745,7 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--start", default=None, help="default: earliest available price date")
     rb.add_argument("--end", default=None, help="default: latest available price date")
     rb.add_argument("--rebalance-month", type=int, default=4, help="April by default, as for `lti backtest`")
+    _add_friction_args(rb)
     rb.set_defaults(func=cmd_rolling_backtest)
 
     fi = sub.add_parser("factor-ic", help="cross-sectional IC of each metric vs forward return")
@@ -564,6 +794,21 @@ def build_parser() -> argparse.ArgumentParser:
     jl = sub.add_parser("journal", help="every logged decision and what the stock did since")
     jl.set_defaults(func=cmd_journal)
 
+    pa = sub.add_parser("portfolio-add", help="log a transaction in your own portfolio")
+    pa.add_argument("action", help="deposit, withdraw, buy, sell or income")
+    pa.add_argument("ticker", nargs="?", help="for a buy or sell (or income from one holding)")
+    pa.add_argument("--shares", type=float, help="as the broker showed them that day")
+    pa.add_argument("--price", type=float, help="per share; default: that day's close")
+    pa.add_argument("--amount", type=float, help="for a deposit, withdrawal or income (negative for a fee)")
+    pa.add_argument("--fees", type=float, default=0.0, help="commission on a buy or sell")
+    pa.add_argument("--kind", choices=["stock", "fund"], help="override how the ticker is classified")
+    pa.add_argument("--date", help="default: today")
+    pa.add_argument("--note")
+    pa.set_defaults(func=cmd_portfolio_add)
+
+    pf = sub.add_parser("portfolio", help="your portfolio: holdings, returns, and the same money in SPY")
+    pf.set_defaults(func=cmd_portfolio)
+
     em = sub.add_parser("explain-models", help="what each intrinsic-value equation does and assumes")
     em.add_argument("--width", type=int, default=92, help="wrap width (60-120)")
     em.set_defaults(func=cmd_explain_models)
@@ -582,7 +827,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="keep banks, insurers, REITs and BDCs (the models assume an operating business)",
     )
     uv.add_argument("--min-roe", type=float, default=None, help="quality floor, e.g. 0.1")
-    uv.add_argument("--discount-rate", type=float, default=0.09)
+    uv.add_argument(
+        "--discount-rate", type=float, default=None,
+        help="a fixed rate; by default the 10-year Treasury on the as-of date plus --equity-premium "
+             "(cached by `lti fetch-rates`), else 0.09",
+    )
+    from lti.valuation import EQUITY_PREMIUM
+
+    uv.add_argument("--equity-premium", type=float, default=EQUITY_PREMIUM,
+                    help=f"added to the 10-year Treasury for the market discount rate (default {EQUITY_PREMIUM:g})")
     uv.add_argument("--growth-cap", type=float, default=0.15)
     uv.add_argument("--allow-negative-eps", action="store_true", help="drop the profitable-now requirement")
     uv.add_argument(

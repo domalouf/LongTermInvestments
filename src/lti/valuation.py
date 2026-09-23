@@ -54,12 +54,14 @@ Growth is clipped to ``[0, growth_cap]`` either way; pass an explicit
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
+from lti import rates as rates_mod
 from lti.metrics import _col, _safe_div
 
 if TYPE_CHECKING:
@@ -98,6 +100,34 @@ class ValuationAssumptions:
         self.terminal_growth = min(self.terminal_growth, self.discount_rate - 0.01)
 
 
+# The return demanded of stocks over the 10-year Treasury: the market-rates
+# discount rate is the two added. At a 4% Treasury it's the fixed default's 9%.
+EQUITY_PREMIUM = 0.05
+
+
+def market_assumptions(
+    asof,
+    rates: pd.DataFrame,
+    base: ValuationAssumptions | None = None,
+    equity_premium: float = EQUITY_PREMIUM,
+) -> ValuationAssumptions:
+    """``base`` at the interest rates of ``asof`` (:mod:`lti.rates`).
+
+    The discount rate becomes the 10-year Treasury that day plus
+    ``equity_premium``, and the bond yield in Graham's revised formula the AAA
+    corporate yield. A rate with nothing cached near ``asof`` keeps ``base``'s
+    fixed value, so an empty ``rates`` gives ``base`` back unchanged.
+    """
+    base = base or ValuationAssumptions()
+    now = rates_mod.rates_asof(rates, asof)
+    changes = {}
+    if pd.notna(now["treasury_10y"]):
+        changes["discount_rate"] = float(now["treasury_10y"]) + equity_premium
+    if pd.notna(now["aaa"]):
+        changes["bond_yield"] = float(now["aaa"])
+    return dataclasses.replace(base, **changes) if changes else base
+
+
 @dataclass(frozen=True)
 class ModelDoc:
     """One model explained in one place.
@@ -132,7 +162,8 @@ MODEL_DOCS: dict[str, ModelDoc] = {
         ),
         inputs=(
             "free cash flow per share — the normalized median FCF over today's share count, or "
-            "operating cash flow − capex from the latest 10-K — grown at g (clipped to [0, growth_cap]) "
+            "operating cash flow − capex − stock-based pay from the latest 10-K — grown at g (clipped to "
+            "[0, growth_cap]) "
             "for N years, then forever at g_term, all discounted at the required return r."
         ),
         at_defaults=(
@@ -654,7 +685,8 @@ def rank_undervalued(
     ``min_profit_years`` of those years (a stable earner rather than one good
     year), with at least ``min_models`` models producing a number and a blended
     upside in ``(min_upside, max_upside]`` (the upper bound drops data errors),
-    then sort by ``fair_value_est_upside`` descending.
+    then sort by ``fair_value_est_upside`` descending. Without ``assumptions``
+    it values at the interest rates of ``asof`` (:func:`market_assumptions`).
 
     ``require_positive_eps`` asks for positive EPS both in the latest year and
     on the basis the models run on: a company losing money today isn't
@@ -666,6 +698,8 @@ def rank_undervalued(
     from lti import pit
 
     asof = pd.Timestamp(asof)
+    if assumptions is None:
+        assumptions = market_assumptions(asof, px.rates)
     snap = pit.priced_snapshot(fund, asof, px, with_history=True)
     if snap.empty:
         return snap

@@ -44,7 +44,7 @@ def _rank(key: str) -> pd.DataFrame:
         prices_mod.load_price_data(),
         p["asof"],
         assumptions=ValuationAssumptions(
-            discount_rate=p["discount_rate"],
+            **p["rates"],
             terminal_growth=p["terminal_growth"],
             growth_cap=p["growth_cap"],
         ),
@@ -93,7 +93,7 @@ with st.sidebar:
     top_n = st.slider("Show top N", 10, 100, 40)
 
     with st.expander("Valuation assumptions"):
-        disc = st.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+        rate_kw = widgets.rates(asof)
         term = st.slider("Terminal growth", 0.0, 0.04, 0.025, 0.005, format="%.3f")
         gcap = st.slider("Max growth", 0.05, 0.30, 0.15, 0.01, format="%.2f")
         min_models = st.slider(
@@ -112,7 +112,7 @@ ranked_all = _rank(
             "require_positive_eps": require_pos_eps,
             "exclude_financials": excl_fin,
             "min_roe": (min_roe_pct / 100) if min_roe_pct else None,
-            "discount_rate": disc,
+            "rates": rate_kw,
             "terminal_growth": term,
             "growth_cap": gcap,
         }
@@ -347,9 +347,7 @@ with left:
             yaxis_title="",
         )
         # the arithmetic behind each bar, at the sidebar's assumptions
-        page_assumptions = ValuationAssumptions(
-            discount_rate=disc, terminal_growth=term, growth_cap=gcap
-        )
+        page_assumptions = ValuationAssumptions(**rate_kw, terminal_growth=term, growth_cap=gcap)
         theme.note(
             "<br>".join(
                 f"<b>{MODEL_DOCS[m].label}</b> &nbsp;{explain(m, row, page_assumptions)}"

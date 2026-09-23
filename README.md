@@ -49,19 +49,31 @@ Configuration for `secfsdstools` is generated automatically: importing `lti` ren
 lti update --force
 #    (if the download already ran and you only need to re-run the pipeline: `lti pipeline`)
 
-# 2. Build the flat fundamentals table (data/derived/fundamentals.parquet)
+# 2. Build the flat fundamentals table (data/derived/fundamentals.parquet, plus
+#    quarterly.parquet: trailing-twelve-month rows from 10-Qs — see "Quarterly filings")
 lti build-fundamentals
+lti build-quarterly              # just the 10-Q rows, on an existing fundamentals table
 lti coverage
 
 # 3. Map CIKs to tickers, then cache prices for the universe (resumable)
 lti refresh-tickers
 lti fetch-prices                 # thousands of tickers via yfinance — takes about an hour
+                                 # (plus whatever your portfolio holds, index funds included)
 lti refresh-prices              # later: cheap daily top-up of already-cached tickers
+lti fetch-rates                 # the 10-year Treasury and AAA yields from FRED, which valuation discounts at
+lti fetch-factors               # the Fama-French factors, for `lti backtest --attribution`
 
-# 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe)
+# 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe),
+#    after 10 bps a trade — see "Trading costs and taxes" below
 lti backtest --metrics pe,debt_to_equity --top-n 10 --start 2011-01-01
 lti backtest --metrics pe,debt_to_equity --top-n 10 --all-months   # the same, once per rebalance month
 lti rolling-backtest --metrics pe,debt_to_equity --top-n 10 --windows 3,5   # over every 3- and 5-year window
+#     --cost-bps 0            gross: no trading costs
+#     --taxable               tax dividends and realized gains (--short-term-tax, --long-term-tax, --dividend-tax)
+#     --hold-past-year        wait a year and a day between rebalances, so every gain is long-term
+#     --sell-rank 60          with --top-n 30: keep a holding until it drops out of the top 60
+#     --industry-cap 0.2      at most 20% of the picks in any one industry
+#     --attribution           regress the result on the Fama-French factors: skill or style?
 
 # 4a. Greenblatt's Magic Formula (EBIT/EV + return on capital, no financials/utilities)
 lti backtest --magic-formula --top-n 30 --start 2013-01-01
@@ -82,6 +94,9 @@ lti track-record                 # write down what each tracked strategy holds t
 lti track-report                 # how the records have done since
 lti journal-add AAPL buy --thesis "why" --change-my-mind "what would prove it wrong"
 lti journal                      # every logged decision and how it has aged
+lti portfolio-add deposit --amount 10000          # your own account (see "Portfolio" below)
+lti portfolio-add buy VTI --shares 20             # at that day's close unless --price
+lti portfolio                    # holdings, returns, and the same money in SPY
 
 # 5. GUI (see "GUI" section below)
 streamlit run src/lti/app/Home.py
@@ -115,6 +130,40 @@ backtest (2011–) from 16.0% to 6.9% a year, and the Magic Formula top-30 (2013
 way: ROIC's IC t-stat fell from 7.6 to 2.1, and P/B's from −4.2 to 0.0. Valuing on the
 dividend-adjusted price would flatter past dividend payers too, which is why valuation
 uses `close.parquet`.
+
+### Quarterly filings: trailing twelve months
+
+On 10-Ks alone a company's numbers were up to fifteen months old: an April screen ranked on
+December's year, an October screen on the same one. The SEC data sets carry every 10-Q too,
+and the standardization pipeline already keeps them, so `lti.quarterly` turns each into a row
+shaped exactly like an annual one, in `data/derived/quarterly.parquet` (built by `lti
+build-fundamentals`, or on its own by `lti build-quarterly` — no need to rerun the pipeline):
+
+- **Flows** are trailing twelve months: *last fiscal year + this year to date − the same
+  period a year earlier* — at a Q2 10-Q, FY2023 + H1 2024 − H1 2023. The year to date is the
+  filing's own; the other two come from the last 10-K and the year-earlier 10-Q, both filed
+  before it, so a backtest sees nothing early.
+- **The balance sheet** is the quarter-end one, as are the debt, fixed assets and share
+  counts read from the raw files. Shares are reconciled like a 10-K's, from the quarter's
+  own figures, and **EPS** is TTM net income over that count — EPS from different filings
+  can sit on different share bases.
+- **Operating income** counts as reported (for EBIT/EV and ROIC) only when the last 10-K
+  tagged it; **a year ago** (`revenues_prev`, `eps_prev` …) is the year-earlier 10-Q's TTM row,
+  so growth compares like with like.
+- **Only when it holds:** a 10-Q becomes a row only if the last 10-K ends 3, 6 or 9 months
+  before it — matching the quarters its year to date covers — the year-earlier 10-Q exists,
+  and revenue, net income, operating cash flow and equity all come out. Otherwise the
+  snapshot falls back to the 10-K, exactly as before.
+
+`load_fundamentals()` appends the rows (`form = "10-Q"`, `basis = "ttm"`), so every
+point-in-time snapshot — the screens, backtests, factor analysis, the Undervalued list —
+takes each company's latest filing, 10-K or 10-Q. What counts years ignores them
+(`pit.annual`): the five-year normalized earnings and consistency, the Stock page, and the
+pre-registered factor study, which stays on 10-Ks as registered. The Backtest and Rolling
+pages' *Use 10-Q filings* (`--annual-only` on the CLI) switches them off, to see what the
+fresher numbers changed; the Screener's *From* column says which a row is. The five-year
+normalized EPS the Undervalued list values on is still annual — what gets fresher there is
+the latest year's EPS, the balance sheet and the price-based ratios.
 
 ### Share counts
 
@@ -188,6 +237,163 @@ Note that this changes no return anywhere: `adj_close.parquet` has always been a
 total-return series, so the backtests, the factor study and the forward track record
 already counted every dividend. What is new is being able to *see* and *rank on* them.
 
+### Interest rates, as of each date
+
+Three of the six valuation models discount at a required return — the DCF, the dividend
+discount and earnings power — and Graham's revised formula scales by the AAA corporate
+yield. Held at a fixed 9% and 4.5%, every date was valued at the same rates: April 2013,
+when the 10-year Treasury paid 1.8%, the same as October 2023, when it paid nearly 5%. A
+backtest of `fair_value_upside` was scoring each year's list against rates nobody could
+have used then.
+
+`lti fetch-rates` caches two daily FRED series in `data/prices/rates.parquet`: the 10-year
+Treasury (`DGS10`) and Moody's seasoned AAA corporate yield (`DAAA`). Every valuation that
+has a date then uses that date's rates (`valuation.market_assumptions`): a discount rate of
+the Treasury plus an **equity risk premium** (5% by default, so a 4% Treasury gives the old
+9%), and the AAA yield for Graham. That covers `fair_value_upside` in every backtest and in
+the factor analysis, the Undervalued list and the public snapshot, and the tracked
+Undervalued strategy. The Undervalued, Stock and Screener pages swap the discount-rate
+slider for a premium slider and say what the rate came to; `lti undervalued
+--discount-rate` still sets a fixed one. The rates ride on `PriceData` beside the prices,
+so a backtest reads them point in time exactly as it reads a price.
+
+Without the cache — or more than two weeks past its last reading — everything falls back to
+the fixed 9% and 4.5%, so nothing breaks before the first fetch. The nightly job refreshes
+it. The Undervalued figures quoted below were measured at the fixed rates. Low rates raise
+every fair value, and long-duration ones most: in 2020, with the Treasury under 1%, far
+more names show upside, which is the point — that is what these models said at the time.
+
+### Free cash flow and stock-based pay
+
+`free_cash_flow` is operating cash flow less capex **less stock-based compensation**. The
+cash-flow statement adds stock pay back as a non-cash expense, but paying staff in shares is
+still paying them: the cost lands on the owners as dilution, or as the buybacks spent
+offsetting it. Left in, it flatters exactly the companies that pay most in stock, and
+everything built on free cash flow inherits that — the DCF, `fcf_yield`, `fcf_yield_norm`,
+`fcf_margin`, and cash conversion on the Undervalued page.
+
+The figure is the `ShareBasedCompensation` line of the standardized cash-flow statement
+(`stock_comp`). A filing without one is taken to have none, which leaves its free cash flow
+as it was — the line is where material stock pay shows. A stock-comp figure too large by a
+scale error can only push a company *down* the cash rankings and out of the DCF, never up.
+`free_cash_flow_reported` keeps the textbook `cfo − |capex|`, and the Stock page's cash-flow
+tab charts `stock_comp` beside the others. A fundamentals table built before this is
+upgraded as it loads; no rebuild needed. The Undervalued page's backtest figures quoted
+below predate the change.
+
+Two things stay on the old definition on purpose, via `study.as_registered`: the
+pre-registered factor study, and the track record's *quality + value* strategy, which tests
+the study's composite. Changing a registered hypothesis's inputs after seeing its result is
+what pre-registration exists to prevent.
+
+### Trading costs and taxes
+
+A gross backtest trades at the close for free and never pays tax, which flatters a strategy
+that turns over every year against SPY, bought once and held. So every backtest — the
+Backtest and Rolling pages, `lti backtest`, `lti rolling-backtest` — runs the strategy, its
+universe and SPY a second time as a book of tax lots (`lti.frictions.Book`), and reports that:
+
+- **Trading costs.** Every dollar traded pays `--cost-bps` of itself each way — the
+  half-spread plus any commission. The default, 10 bps, is a middle estimate for the $500M+
+  companies these screens buy: large caps trade tighter, small caps wider. It's charged on
+  the actual trades — selling what dropped out, buying what came in, and trimming or topping
+  up what stayed back to equal weight. `--cost-bps 0` gives the gross backtest.
+- **Taxes** (`--taxable`, or the *Taxable account* toggle; off is an IRA or 401(k)).
+  Dividends are taxed as they arrive and only the rest is reinvested — each holding's
+  dividend being its total return less its price return, `adj_close` against `close`. Gains
+  are taxed when a sale realizes them: at the short-term rate for a lot held a year or less,
+  the long-term rate for one held longer, oldest lot first, with losses offsetting gains and
+  the rest carried forward. The defaults — 24% short-term, 15% long-term and on dividends —
+  are a middle federal bracket with no state tax: set your own.
+- **The same rules for all three.** The universe pays them on its own, smaller, turnover,
+  so the gap to it is what the ranking adds after paying for the trading it takes. SPY pays
+  the cost once and the tax on its dividends — and, never being sold, nothing on its gains.
+  *Sold at the end* (`*_cagr_liquidated`) puts all three on the same footing: the CAGR had
+  everything been sold on the last day, paying the tax on every gain still unrealized.
+
+**The one-year trap.** A gain is long-term only if the lot was held *more* than a year. The
+annual rebalance falls on the first trading day of the month, which in most years is on or
+before the anniversary of the last one — April 1, 2013 to April 1, 2014 is a year to the
+day, so short-term. Left alone, most of an annual strategy's gains are taxed as income.
+`--hold-past-year` (*Sell only after a full year*) waits until a year and a day have
+passed, which drifts the rebalance a few days later each year. It's half of what Greenblatt
+advises for running the Magic Formula in a taxable account; the other half, selling losers
+just *before* the year, would need two trading dates a year.
+
+**Trading less: a sell buffer.** Without one, a holding is sold the moment it slips out of
+the top N — 30th to 31st is enough — and often bought back a year later, paying the cost
+and the tax both ways for rank noise. `--sell-rank` (*Sell a holding once it drops out of
+the top* …) keeps a holding until it falls out of a wider band, and refills only the places
+its departures free up with the best-ranked names not already held: `--top-n 30
+--sell-rank 60` buys the top 30 but sells only below 60th. The price is that the portfolio
+holds some names the screen no longer ranks in its top N. Each period records
+`n_held_over`, and each holding `held_over` and the `rank` it was bought or kept at, so the
+trade-off shows in the turnover, the costs and the taxes against the same run without it.
+Off by default (`sell_rank = None`).
+
+Each backtest reports, beside the usual statistics (which are now net): `*_cagr_gross`,
+`*_costs_pa` and `*_taxes_pa` (the average paid per rebalance period, as a share of the
+portfolio), `*_cagr_liquidated`, and `port_short_term_share`; each period adds
+`port_return_gross`, `turnover` (one-way), `costs`, `taxes` and the realized gains by
+term. Left out: the $3,000 of losses a year that can offset ordinary income (a fixed sum,
+meaningless at an arbitrary portfolio size), wash sales, and the delay to the following
+April — tax is paid when the gain is realized, which is slightly conservative.
+
+**Returns quoted elsewhere in this README were measured gross, before this existed** —
+rerun with `--cost-bps 0` to reproduce them. The factor study's backtests stay gross, as
+registered.
+
+### Industry concentration, and a cap on it
+
+A screen can rank well on every metric and still be one bet on one industry: the factor
+study's final screen, below, came out as a portfolio of shrinking retailers and telecoms.
+So every backtest now records the largest industry in the portfolio at each rebalance
+(`top_industry`, `top_industry_share`; `port_top_industry_share` averages it), and
+`--industry-cap` (*Most in one industry* on the Backtest and Rolling pages) limits it:
+walking down the ranking, a name whose industry already fills its share is passed over for
+the next one. With equal weights the cap is a count — `--top-n 30 --industry-cap 0.2` allows
+6 names per industry — and never below one.
+
+Industries are Fama and French's 12, from SIC codes (`lti.sectors.industry`): Consumer
+Non-Durables, Consumer Durables, Manufacturing, Energy, Chemicals, Business Equipment,
+Telecom, Utilities, Shops, Health, Finance and Other. The SIC *divisions* the Screener shows
+as `sector` are too coarse for this — Manufacturing alone is about half the market, drugs,
+chips, cars and food together — so a cap on them would mostly push a portfolio out of
+manufacturing rather than off a theme. A company with no SIC code is never capped. Kept
+holdings under a sell buffer count toward their industry but aren't sold to make room.
+Each holding records its `industry`. Off by default (`industry_cap = None`).
+
+### Skill or style: a factor regression
+
+A screen that beats its universe may simply own smaller, cheaper or more profitable
+companies than the universe does — tilts an index fund can buy, and that the academic
+factors already price. Regressing monthly returns on Fama and French's factors separates
+the two (`lti.attribution`): the loadings are the tilts, and the intercept, **alpha**, is
+what's left — the part of the return the tilts don't explain.
+
+`lti fetch-factors` caches Ken French's monthly five factors (market, size, value,
+profitability, investment, and the T-bill rate) and his momentum factor. Then every
+backtest can be regressed four ways — `lti backtest ... --attribution`, or *Skill or
+style?* on the Backtest page:
+
+| regression | what it says |
+| --- | --- |
+| strategy − T-bill | the strategy's tilts, and its alpha against the factors |
+| universe − T-bill | the tilts the screen inherits just from what it picks among |
+| **strategy − universe** | the ranking's edge, and what's left of it once the tilts it adds are accounted for |
+| SPY − T-bill | a calibration: about 1 on the market, next to nothing else, alpha near zero |
+
+The page leads with the third: the strategy's CAGR over its universe, how much of it the
+factors leave unexplained and with what t-stat, and its biggest tilt against the universe.
+Models run from the market alone (CAPM) through Fama-French 3 and 5 to 5 plus momentum (the
+default); `--factor-model` picks one. Standard errors are Newey-West, and only whole calendar
+months count, so a backtest's first-trading-day rebalances don't split a month. Two caveats:
+the strategy and universe can only hold survivors while the factors are built from every
+stock, so their own alphas carry the survivorship bias (strategy − universe largely nets it
+out); and a dozen years of monthly returns is little evidence — an alpha with a t-stat under
+2 is indistinguishable from none. The curves are regressed as reported, so after costs and
+taxes when the backtest charges them.
+
 ## GUI
 
 ```bash
@@ -197,7 +403,7 @@ streamlit run src/lti/app/Home.py          # opens http://localhost:8501
 
 **Undervalued today is the landing page.** The sidebar groups the rest by what you're
 there to do: *Find something to buy* (Undervalued, Stock detail), *Test an idea*
-(Screener, Backtest, Rolling backtest, Factor analysis), *Keep score* (Track record, Decision journal)
+(Screener, Backtest, Rolling backtest, Factor analysis), *Keep score* (Portfolio, Track record, Decision journal)
 and *Housekeeping* (Data health). Leave
 `LTI_SMOKE` unset to use the full `fundamentals.parquet`.
 
@@ -235,7 +441,7 @@ more than one, plus `composite_score` = mean percentile-rank, lower = better), C
 download, a **"Ranked metric values"** bar chart per metric (each pick's value labelled,
 universe median marked; the old histogram is in a per-metric expander), and a
 **"Fair-value estimates"** table running the intrinsic-value models (below) on the picks
-with adjustable discount rate / max growth.
+with adjustable discount rate (or equity risk premium, with rates cached) / max growth.
 
 #### Greenblatt's Magic Formula (`ebit_ev` + `roic`)
 The screen from *The Little Book that Beats the Market*: rank the universe on how cheap
@@ -279,8 +485,12 @@ PP&E, interest-bearing debt, as-reported operating income and share counts from 
 ### 🧪 Backtest — simulate a strategy vs SPY and vs its own universe
 Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month** —
 April by default, when calendar-year 10-Ks are in; in January a screen ranks on
-fundamentals a median of a year old — **Min market cap**, **Initial capital**); hit
-**Run backtest**.
+fundamentals a median of a year old — **Min market cap**, **Initial capital**, and the sell
+buffer: **Sell a holding once it drops out of the top** …, **Most in one industry**, and **Use
+10-Q filings**)
+and the
+**Costs and taxes** (trading cost, taxable account, the three rates, *Sell only after a
+full year* — see [Trading costs and taxes](#trading-costs-and-taxes)); hit **Run backtest**.
 
 Two benchmarks: **SPY**, and the **universe** — every stock the screen ranked on each
 rebalance date, equal-weighted, which is what picking at random from the same candidates
@@ -288,9 +498,16 @@ would have returned. The universe can only hold today's survivors too, so the ga
 between it and the strategy is the honest measure of the ranking; the gap to SPY has the
 survivorship bias baked in.
 
-Body: equity curve vs SPY and the universe (log toggle), tiles (strategy / universe / SPY
-CAGR, max drawdown, Sharpe), full stats table, a **survivorship-bias callout**, per-period
-excess returns against either benchmark, **Does the rebalance month matter?** (the same
+Body: equity curve vs SPY and the universe, plus the strategy before costs and taxes
+(log toggle), tiles (strategy / universe / SPY CAGR after costs and taxes, max drawdown,
+Sharpe), full stats table, **What trading and taxes took** (each portfolio's CAGR before
+and after, costs and taxes a year, the CAGR if sold at the end, turnover and the share of
+gains taxed short-term), a **survivorship-bias callout**, per-period
+excess returns against either benchmark, **Was it one theme?** (the largest industry's
+share of the portfolio at each rebalance, against the cap if one is set), **Skill or
+style?** (the factor regression above: the edge over the universe split into tilts and
+alpha, with all four regressions in an expander), **Does the
+rebalance month matter?** (the same
 strategy run once per month — with a dozen annual rebalances, the month alone can decide
 whether a screen beats its universe), the per-period summary, a holdings expander (every
 pick with the metric values it was ranked on, + CSV), and a warnings expander. Results
@@ -302,7 +519,7 @@ window of each chosen length — every 3-year and every 5-year stretch of the pr
 history, say, starting a year apart — and asks how often the strategy beat its universe
 and SPY. Sidebar: the strategy as on the Backtest page, plus **Window lengths**, **Step
 between window starts** and an optional **Earliest start / Latest end** (blank = all the
-price history). Body: a summary per window length (median, worst and best CAGR; the
+price history), and the same **Costs and taxes**. Body: a summary per window length (median, worst and best CAGR; the
 average gap to the universe and to SPY, and how often each was beaten; drawdown and
 Sharpe), a box plot of each window's gap to the universe, every window + CSV, and a
 warnings expander. Also on the CLI as `lti rolling-backtest`. Windows of one length
@@ -365,11 +582,14 @@ beat its bottom half by about two points a year. But a **top-30 portfolio of it 
 own universe by 3.6% a year in 2019–25**, ahead in 1 of 12 rebalance months (in-sample,
 2011–18, it had beaten it by 5.0%). The names that score well on all four at once are
 shrinking cash-returners — Macy's, Kohl's, Best Buy, Western Union, Lumen, Sirius — much of
-it in industries in decline, so the portfolio rides one theme. The signals are real across
+it in industries in decline, so the portfolio rides one theme (`--industry-cap`, above, tests
+whether spreading it helps). The signals are real across
 the market; a concentrated screen on them isn't a way to collect them. Caveats: two
 seven-year halves, a survivor-only universe (which flatters distressed stocks and so
 works against Altman Z and quality in the first half), and published factors typically
-lose much of their edge after publication.
+lose much of their edge after publication. Three later changes are held off so these numbers
+stay reproducible: the study ranks on 10-Ks alone, not the fresher 10-Q rows; it measures free
+cash flow with stock-based pay still in it; and its backtests are gross of trading costs.
 
 ### 🔬 Stock detail — one company over time
 Sidebar: **Ticker** (matches the primary symbol *and* the full `tickers_all` list, so
@@ -378,9 +598,10 @@ book value**.
 Body: eight tabs — **Price** (adjusted close with filing-date markers), **Income**
 (revenue → net income bars + EPS), **Margins & returns** (gross / net / FCF margin, ROE),
 **Balance sheet** (assets / liabilities / equity + debt-to-equity), **Cash flow**
-(CFO / capex / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
+(CFO / capex / stock comp / FCF), **Valuation** (trailing P/E and P/B time series with a median line),
 **Fair value** (intrinsic-value models, below, on normalized or latest-year earnings, with
-a per-company 5-year CAGR growth input and adjustable discount rate / terminal growth /
+a per-company 5-year CAGR growth input and adjustable discount rate (today's Treasury plus a
+premium, with rates cached) / terminal growth /
 DCF window), and **Raw data** (the annual table + CSV). The Valuation and Fair-value tabs carry each 10-K's EPS and book
 value forward from its filing date, restate them onto today's share count using the
 cached split history, and price them off the split-adjusted close — without that,
@@ -422,6 +643,33 @@ version did 10.1% against 12.4%. The fair-value upside has no measurable IC eith
 says so. Also on the CLI as `lti undervalued`; with `--out DIR` it writes a self-contained
 `index.html` + `undervalued.{json,csv}`, which `deploy/` publishes nightly to
 `domalouf.com/invest/` as the public daily list.
+
+### 💼 Portfolio — your own account, against the same money in SPY
+The journal scores decisions but not how much money rode on them; this keeps the account
+itself. An append-only ledger (`data/track/portfolio.jsonl`) of deposits, withdrawals, buys,
+sales and income, logged on the page or with `lti portfolio-add`, is replayed against the
+price cache (`lti.portfolio`):
+
+- **Shares** are entered as the broker showed them that day and restated through every
+  split since, the way the screens restate EPS, so a split doesn't read as a loss.
+- **Dividends** on cached tickers are credited on each ex-date for the shares held the day
+  before; `income` is for what the cache lacks — interest, a fee (negative), a dividend on
+  something uncached. `lti fetch-prices` now caches every ticker in the ledger, index funds
+  included; after buying something new, rerun it — it only downloads what isn't cached yet.
+- **A buy beyond the cash on hand** counts the difference as new money that day, so a
+  ledger of trades alone adds up. Cost basis is the average cost, for display, not tax lots.
+
+The comparison it's built for: **the same money, moved on the same days, in SPY** — every
+deposit a purchase of SPY, every withdrawal a sale. The gap is what your choices were worth
+in dollars; the money-weighted return (XIRR) of each says it per year, and the time-weighted
+return takes the timing of your deposits out. The same comparison runs for every position
+(its buys, sales and dividends, in SPY instead) and for two sleeves: **the stocks you
+picked** — US companies that file 10-Ks — against **funds**, everything else (a foreign
+stock can be marked by hand). How much belongs in picks and how much in an index is the
+decision those two lines inform. Body: tiles (value, money in, gain, against SPY,
+money-weighted return — shown after a year, since a few months annualized say more about
+the calendar than about you), the account against the same money in SPY and the money put
+in, the sleeves, holdings and closed positions, and the ledger + CSV.
 
 ### 📒 Track record — the only test free of hindsight
 Every backtest here runs on a survivor-only universe, and every idea in this project was
@@ -473,7 +721,7 @@ value can be checked against the numbers that produced it.
 | input | `basis="normalized"` (default) | `basis="latest"` |
 | --- | --- | --- |
 | EPS | median of the last 5 years' EPS (`eps_norm`) | the latest 10-K's EPS |
-| FCF per share | median 5-year FCF ÷ today's share count | (CFO − capex) ÷ shares, latest 10-K |
+| FCF per share | median 5-year FCF ÷ today's share count | (CFO − capex − stock comp) ÷ shares, latest 10-K |
 | book value per share | equity ÷ shares outstanding | same |
 | dividend | last 12 months actually paid (`dps_ttm`), else the cash-flow tag | same |
 | growth `g` | 5-year revenue CAGR (`revenue_cagr`) | one-year EPS change, else revenue's |
@@ -484,7 +732,11 @@ since each filing, and priced off the split-adjusted close (`lti.pit.priced_snap
 not a 40% grower for a decade, and a negative one would value a shrinking business at less than
 zero. Pass an explicit `growth` Series (e.g. `historical_cagr(annual, "eps")`) to override the
 estimate. The rest is `ValuationAssumptions`: `discount_rate` (9%), `terminal_growth` (2.5%,
-forced at least a point below the discount rate), `dcf_years` (10), `bond_yield` (4.5%).
+forced at least a point below the discount rate), `dcf_years` (10), `bond_yield` (4.5%). With
+rates cached, a dated valuation replaces the discount rate with the 10-year Treasury on the
+date plus a 5% equity risk premium, and the bond yield with that day's AAA yield — see
+[Interest rates, as of each date](#interest-rates-as-of-each-date). The figures "at the
+defaults" below are at the fixed 9% and 4.5%.
 
 #### The six equations
 
@@ -594,9 +846,11 @@ src/lti/
   sec_update.py    wrappers around secfsdstools update / automation pipeline
   tickers.py       CIK <-> ticker map (primary = the SEC's first-listed security)
   fundamentals.py  build/load the flat fundamentals.parquet + coverage report
+  quarterly.py     trailing-twelve-month rows from 10-Qs, so a snapshot sees the latest quarter
   rawtags.py       SIC + debt / PP&E / goodwill / share counts straight from the raw SEC files
-  sectors.py       SIC -> division, and the financials / utilities exclusions
+  sectors.py       SIC -> division and Fama-French industry, and the financials / utilities exclusions
   prices.py        yfinance cache: total-return + split-adjusted panels, split history (resumable)
+  rates.py         FRED's 10-year Treasury and AAA corporate yields, cached, read as of a date
   metrics.py       P/E, P/B, PEG, EBIT/EV, ROIC, debt/equity, ROE, margins, growth, ...
   history.py       five years of filings, point in time: normalized EPS/FCF, consistency, growth
   valuation.py     intrinsic-value models (DCF, Lynch, Graham, DDM, EPV) + rank_undervalued
@@ -605,6 +859,8 @@ src/lti/
   pit.py           point-in-time snapshots: split-correct, operating companies, priced
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine, universe benchmark, rebalance-month spread
+  frictions.py     trading costs and taxes: a portfolio as tax lots, rebalanced and marked forward
+  attribution.py   Fama-French factor regressions of a backtest: tilts against alpha
   rolling.py       reruns the backtest over every N-year window in the price history
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard
@@ -613,6 +869,7 @@ src/lti/
   study.py         the pre-registered factor test: hypotheses fixed in code, 2011-18 chooses, 2019-25 judges
   track.py         the forward track record: append-only daily holdings of each strategy, scored later
   journal.py       the decision journal: append-only decisions, each scored against SPY since
+  portfolio.py     your own account: a ledger replayed against the prices, against the same money in SPY
   stock.py         one company's annual fundamentals + valuation time series
   app/             Streamlit UI
     Home.py        entry point: page config, theme, navigation
@@ -624,12 +881,14 @@ tests/             pure-logic unit tests (no network / SEC data)
 ```
 
 `data/` (gitignored) holds everything generated: `data/sec/` (secfsdstools),
-`data/derived/` (fundamentals, ticker map), `data/prices/` (price panels + split history),
-`data/track/` (the track record and the decision journal — the one part that can't be rebuilt).
+`data/derived/` (fundamentals and their 10-Q rows, ticker map), `data/prices/` (price panels, split and dividend history, interest rates),
+`data/track/` (the track record, the decision journal and your portfolio ledger — the one part
+that can't be rebuilt).
 
 ## Known limitations / v2 ideas
 
-- Annual (10-K) only; no quarterly rebalancing yet.
+- Rebalancing is annual, even though the fundamentals now include each 10-Q as trailing
+  twelve months; the five-year normalized figures are annual by design.
 - "Debt/equity" = total liabilities / equity (not just interest-bearing debt).
 - Share counts are the 10-K's (restated for splits, see above), so buybacks or issuance
   between the filing and the as-of date aren't in `market_cap` yet.
@@ -645,7 +904,8 @@ tests/             pure-logic unit tests (no network / SEC data)
   sets it equal to revenue whenever it can't find a cost-of-revenue line, which
   is ~27% of $1B+ revenue filings — Chevron, GM, JPMorgan and Berkshire all come
   through at a 100% gross margin. Don't screen on it without checking.
-- No transaction costs, slippage or taxes.
+- Trading costs are one flat rate per dollar traded, not a spread per stock, and don't
+  grow with the size of the order; taxes are federal-style, with no state tax.
 - Normalized earnings assume the last five years are a fair guide: a business in lasting
   decline, or a cycle longer than five years, still fools them.
 - Survivorship bias (see above) — a proper point-in-time delisting map needs paid data.

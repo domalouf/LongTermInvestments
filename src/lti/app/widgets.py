@@ -2,8 +2,10 @@
 
 :mod:`lti.app.theme` owns what the app looks like; this module owns the few
 controls and blocks the pages would otherwise each keep their own copy of — the
-metric picker three pages share, the "hit Run first" gate, the warnings fold,
-the model explainer, and the one cached read of the fundamentals table.
+metric picker three pages share, the discount rate every valuation takes, the
+turnover buffer, industry cap and cost and tax settings both backtest pages
+take, the "hit Run first" gate, the warnings fold, the model explainer, and the
+one cached read of the fundamentals table.
 
 The cache matters: every page that calls :func:`fundamentals` shares a single
 copy of the table rather than holding one apiece.
@@ -14,8 +16,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from lti import rates as rates_mod
+from lti.frictions import DEFAULT_COST_BPS, TaxRates
 from lti.metrics import ALL_METRICS, MAGIC_FORMULA_METRICS
-from lti.valuation import MODEL_DOCS, MODELS
+from lti.valuation import EQUITY_PREMIUM, MODEL_DOCS, MODELS
 
 
 @st.cache_data(show_spinner=False)
@@ -32,6 +36,14 @@ def fundamentals() -> pd.DataFrame:
     except FileNotFoundError:
         st.error("No fundamentals table. Run `lti build-fundamentals` first.")
         st.stop()
+
+
+def fundamentals_or_none() -> pd.DataFrame | None:
+    """:func:`fundamentals` for a page that can do without it."""
+    try:
+        return _fundamentals()
+    except FileNotFoundError:
+        return None
 
 
 def rank_by(default: list[str], *, magic: bool = False) -> tuple[list[str], float]:
@@ -57,6 +69,112 @@ def rank_by(default: list[str], *, magic: bool = False) -> tuple[list[str], floa
              "a company ranks on the average of the metrics it has.",
     )
     return chosen, pct / 100
+
+
+def rates(asof, container=None) -> dict:
+    """The discount rate every valuation page asks for, as ``ValuationAssumptions`` fields.
+
+    Where :mod:`lti.rates` has the date, it's the market's: the 10-year Treasury
+    that day plus an equity risk premium set here, with that day's AAA yield for
+    Graham's revised formula. Where it doesn't, a fixed rate. Plain floats, so
+    the result can go into a cache key.
+    """
+    c = container if container is not None else st
+    now = rates_mod.rates_asof(rates_mod.load_rates(), asof)
+    treasury, aaa = now["treasury_10y"], now["aaa"]
+    if pd.isna(treasury):
+        disc = c.slider(
+            "Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f",
+            help="No 10-year Treasury yield is cached for this date: `lti fetch-rates` sets the rate from "
+                 "the market's at the date instead of a fixed guess.",
+        )
+        return {"discount_rate": disc}
+    premium = c.slider(
+        "Equity risk premium", 0.02, 0.09, EQUITY_PREMIUM, 0.005, format="%.3f",
+        help="What stocks must return over the 10-year Treasury. The discount rate is the two added, "
+             "so it moves with the rates of the date being valued.",
+    )
+    c.caption(
+        f"Discount rate **{treasury + premium:.2%}**: the 10-year Treasury's {treasury:.2%} on "
+        f"{pd.Timestamp(asof).date()}, plus {premium:.1%}."
+        + (f" AAA corporate yield {aaa:.2%}, for Graham revised." if pd.notna(aaa) else "")
+    )
+    out = {"discount_rate": float(treasury + premium)}
+    if pd.notna(aaa):
+        out["bond_yield"] = float(aaa)
+    return out
+
+
+def sell_rank(top_n: int) -> int | None:
+    """The buffer against turnover: how far a holding may slip before it's sold.
+
+    ``None`` when there is no buffer — a holding goes the moment it leaves the top N.
+    """
+    rank = st.slider(
+        "Sell a holding once it drops out of the top", top_n, 4 * top_n, top_n,
+        help=f"At {top_n}, no buffer: whatever leaves the top {top_n} is sold, however narrowly. "
+             "Higher, a holding stays until it falls out of this many, and only the places that "
+             "frees are refilled — so a name drifting from 28th to 33rd isn't sold and bought back "
+             "a year later. Twice the top N is a common choice.",
+    )
+    return rank if rank > top_n else None
+
+
+def industry_cap() -> float | None:
+    """The most of the portfolio allowed in one industry, as a share; ``None`` for no cap."""
+    pct = st.slider(
+        "Most in one industry (%)", 10, 100, 100, step=5,
+        help="Walking down the ranking, a name whose industry already fills this share of the "
+             "portfolio is passed over for the next one. Industries are Fama and French's 12, from "
+             "SIC codes — Shops, Telecom, Health, Business Equipment, Energy and so on. The SIC "
+             "divisions are too coarse for this: Manufacturing alone is half the market. "
+             "100% is no cap.",
+    )
+    return pct / 100 if pct < 100 else None
+
+
+def frictions() -> dict:
+    """The sidebar's trading-cost and tax settings, as plain JSON for a cache key.
+
+    :func:`friction_kwargs` turns them back into config fields.
+    """
+    st.subheader("Costs and taxes")
+    cost = st.number_input(
+        "Trading cost (bps, each way)", value=DEFAULT_COST_BPS, min_value=0.0, step=5.0,
+        help="What a dollar traded loses to the spread and any commission, in hundredths of a "
+             "percent: 10 bps on a buy and 10 on the sale. 0 gives the gross backtest.",
+    )
+    taxable = st.toggle(
+        "Taxable account", value=False,
+        help="Off: an IRA or 401(k), where nothing is taxed until withdrawal. On: dividends are taxed "
+             "as they arrive and gains when a sale realizes them — the strategy, its universe and SPY alike.",
+    )
+    out = {"cost_bps": cost, "tax": None, "hold_past_one_year": False}
+    if taxable:
+        d = TaxRates()
+        pct = {
+            "short_term": st.number_input("Short-term gains tax (%)", 0.0, 60.0, round(d.short_term * 100, 2), 1.0,
+                                          help="Held a year or less: taxed as income."),
+            "long_term": st.number_input("Long-term gains tax (%)", 0.0, 60.0, round(d.long_term * 100, 2), 1.0),
+            "dividends": st.number_input("Dividend tax (%)", 0.0, 60.0, round(d.dividends * 100, 2), 1.0),
+        }
+        out["tax"] = {k: v / 100 for k, v in pct.items()}
+        out["hold_past_one_year"] = st.checkbox(
+            "Sell only after a full year", value=False,
+            help="An annual rebalance on the first trading day of the month lands on or just short of the "
+                 "one-year mark in most years, so the gains are short-term. This waits until a year and a "
+                 "day have passed, which drifts the rebalance a few days later each year.",
+        )
+    return out
+
+
+def friction_kwargs(raw: dict) -> dict:
+    """:func:`frictions`' JSON as :class:`lti.backtest.BacktestConfig` fields."""
+    return dict(
+        cost_bps=raw["cost_bps"],
+        tax=TaxRates(**raw["tax"]) if raw.get("tax") else None,
+        hold_past_one_year=raw.get("hold_past_one_year", False),
+    )
 
 
 def ran_with(name: str, clicked: bool, cfg_key: str) -> bool:

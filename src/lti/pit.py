@@ -1,6 +1,8 @@
 """Point-in-time snapshots (no look-ahead).
 
-:func:`snapshot_asof` is the filing view — which 10-Ks had been filed by a date.
+:func:`snapshot_asof` is the filing view — what had been filed by a date: each
+company's latest 10-K, or the trailing-twelve-month row of a later 10-Q
+(:mod:`lti.quarterly`) where the fundamentals table carries one.
 :func:`company_snapshot` and :func:`priced_snapshot` build the investable
 universe on top of it: per-share figures restated onto the price panels' share
 basis, non-operating filers dropped, metrics and prices attached. The screener,
@@ -14,6 +16,17 @@ import numpy as np
 import pandas as pd
 
 from lti import metrics, prices as prices_mod, sectors
+
+
+def annual(fund: pd.DataFrame) -> pd.DataFrame:
+    """``fund`` without its trailing-twelve-month 10-Q rows: one row per fiscal year.
+
+    For whatever counts years — the five-year history, a company's annual
+    record — rather than wanting the freshest numbers.
+    """
+    if "form" not in fund.columns or not (fund["form"] == "10-Q").any():
+        return fund
+    return fund[fund["form"] != "10-Q"]
 
 
 def snapshot_asof(
@@ -191,7 +204,8 @@ def priced_snapshot(
     ``with_history`` adds what takes several years of filings: the normalized
     and consistency metrics (:data:`lti.metrics.HISTORY_METRICS`, via
     :mod:`lti.history`) and the fair-value upsides built on them
-    (:data:`lti.metrics.VALUATION_METRICS`). It costs a pass over the history,
+    (:data:`lti.metrics.VALUATION_METRICS`), at the interest rates of ``asof``
+    where ``px`` carries them. It costs a pass over the history,
     so it's only worth asking for when something ranks on those.
     """
     asof = pd.Timestamp(asof)
@@ -222,5 +236,6 @@ def priced_snapshot(
         from lti import history, valuation  # both build on this module
 
         snap = history.add_history(snap, fund, asof, px.splits)
-        snap = valuation.add_fair_value_metrics(snap)
+        # valued at the rates of the day, not today's or a fixed 9%
+        snap = valuation.add_fair_value_metrics(snap, valuation.market_assumptions(asof, px.rates))
     return snap

@@ -96,7 +96,9 @@ def holdings(
 ) -> pd.DataFrame:
     """What each strategy holds on ``asof`` — :data:`RECORD_COLUMNS`, equal weights."""
     asof = pd.Timestamp(asof)
-    u = universe(pit.priced_snapshot(fund, asof, px, with_history=True), cap_min)
+    # the study's strategies keep the free cash flow they were chosen on; the
+    # undervalued list, below, values on the current definition like the page does
+    u = universe(pit.priced_snapshot(study.as_registered(fund), asof, px, with_history=True), cap_min)
 
     listed = valuation.rank_undervalued(fund, px, asof, market_cap_min=cap_min, top_n=top_n)
     screen = ranking.rank(u, ScreenSpec(metrics=FINAL_SCREEN, top_n=top_n, min_coverage=0.5)).head(top_n)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -110,6 +112,50 @@ def top_picks(ranked: pd.DataFrame, top_n: int) -> list[str]:
         return []
     picks = ranked.loc[ranked["ticker"].notna(), "ticker"].head(top_n)
     return list(dict.fromkeys(picks.tolist()))
+
+
+def select_holdings(
+    ranked: pd.DataFrame,
+    top_n: int,
+    *,
+    held: Iterable[str] = (),
+    sell_rank: int | None = None,
+    group: str | None = None,
+    max_per_group: int | None = None,
+) -> list[str]:
+    """What to hold, in rank order: :func:`top_picks`, with two optional rules.
+
+    * **A sell buffer** (``sell_rank``). A name already ``held`` stays while it
+      still ranks in the top ``sell_rank``; only the places its departures free
+      up are refilled. Rank noise near the cut-off — a holding slipping from 28th
+      to 33rd — no longer forces a sale, and the costs and taxes that come with one.
+    * **A cap per group** (``max_per_group`` names sharing a value of the
+      ``group`` column). Walking down the ranking, a name whose group is full is
+      passed over for the next one. A name with no group is never capped. Kept
+      holdings count toward their group but aren't sold to make room.
+
+    With neither, it picks what :func:`top_picks` does.
+    """
+    if sell_rank is not None and sell_rank < top_n:
+        raise ValueError(f"sell_rank ({sell_rank}) can't be inside the top_n ({top_n}) the screen buys")
+    if ranked.empty or "ticker" not in ranked.columns:
+        return []
+    rows = ranked[ranked["ticker"].notna()].drop_duplicates("ticker")
+    order = rows["ticker"].tolist()
+    group_of = dict(zip(order, rows[group] if max_per_group is not None else [None] * len(order)))
+
+    chosen = set(held) & set(order[:sell_rank]) if sell_rank is not None else set()
+    counts = Counter(group_of[t] for t in chosen if not pd.isna(group_of[t]))
+    for t in order:
+        if len(chosen) >= top_n:
+            break
+        g = group_of[t]
+        if t in chosen or (not pd.isna(g) and counts[g] >= max_per_group):
+            continue
+        chosen.add(t)
+        if not pd.isna(g):
+            counts[g] += 1
+    return [t for t in order if t in chosen]
 
 
 def select(snapshot: pd.DataFrame, spec: ScreenSpec) -> list[str]:

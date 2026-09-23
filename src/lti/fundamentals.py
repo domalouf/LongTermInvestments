@@ -3,6 +3,10 @@
 One row per company-filing (one 10-K). Every filing is kept, including
 restatements / 10-K/A — point-in-time filtering happens later in :mod:`lti.pit`,
 so duplicate ``(cik, period_end)`` rows are expected and intentional.
+
+The 10-Qs go in a companion table, ``quarterly.parquet``: a trailing-twelve-month
+row per usable 10-Q (:mod:`lti.quarterly`), shaped like an annual row, which
+:func:`load_fundamentals` appends so a snapshot sees the latest quarter.
 """
 
 from __future__ import annotations
@@ -82,7 +86,7 @@ def _standardized_result_df(path) -> pd.DataFrame:
     return StandardizedBag.load(str(path)).result_df
 
 
-def _smoke_standardized_frames(quarters: list[str]) -> dict[str, pd.DataFrame]:
+def _smoke_standardized_frames(quarters: list[str], forms: tuple[str, ...] = ("10-K",)) -> dict[str, pd.DataFrame]:
     """Standardize a handful of quarters in-memory via ZipCollector (no full pipeline)."""
     from secfsdstools.e_collector.zipcollecting import ZipCollector
     from secfsdstools.f_standardize.bs_standardize import BalanceSheetStandardizer
@@ -107,7 +111,7 @@ def _smoke_standardized_frames(quarters: list[str]) -> dict[str, pd.DataFrame]:
         LOGGER.info("smoke: collecting %s for %d quarters", stmt, len(use))
         raw = ZipCollector.get_zip_by_names(
             names=use,
-            forms_filter=["10-K"],
+            forms_filter=list(forms),
             stmt_filter=[stmt],
             post_load_filter=default_postloadfilter,
         ).collect()
@@ -179,6 +183,30 @@ _PRIOR_YEAR_COLS = {
 
 def _add_prior_year(df: pd.DataFrame) -> pd.DataFrame:
     return _lag_prior_period(df, _PRIOR_YEAR_COLS)
+
+
+def add_free_cash_flow(df: pd.DataFrame) -> pd.DataFrame:
+    """``free_cash_flow``: operating cash flow, less capex, less stock-based pay.
+
+    Operating cash flow adds stock compensation back as a non-cash expense, but
+    it is a real cost: staff paid in shares instead of cash, the bill landing on
+    the owners as dilution — or as the buybacks that offset it, which are cash.
+    Left in, it flatters exactly the companies that pay most in stock, and every
+    model built on free cash flow inherits that: the DCF, ``fcf_yield``,
+    ``fcf_margin``, cash conversion.
+
+    ``free_cash_flow_reported`` keeps the textbook ``cfo − |capex|``. A filing
+    with no stock-comp line on its cash-flow statement is taken to have none —
+    the line is where material stock pay shows — which leaves its free cash flow
+    as it was. A stock-comp figure too large by a scale error only pushes a
+    company down the cash-yield rankings and out of the DCF, never up them.
+    """
+    if not {"cfo", "capex"} <= set(df.columns):
+        return df
+    df["free_cash_flow_reported"] = df["cfo"] - df["capex"].abs()
+    sbc = df["stock_comp"].abs().fillna(0.0) if "stock_comp" in df.columns else 0.0
+    df["free_cash_flow"] = df["free_cash_flow_reported"] - sbc
+    return df
 
 
 # --- public API ----------------------------------------------------------
@@ -255,8 +283,7 @@ def build_fundamentals(smoke: bool = False, quarters: list[str] | None = None) -
     merged = rawtags.reconcile_shares(merged)
 
     # convenience columns
-    if "capex" in merged.columns and "cfo" in merged.columns:
-        merged["free_cash_flow"] = merged["cfo"] - merged["capex"].abs()
+    merged = add_free_cash_flow(merged)
     if {"total_debt", "cash"} <= set(merged.columns):
         # unknown debt stays unknown — treating it as zero would make leveraged
         # companies look cheap, which is the exact error EV is meant to avoid.
@@ -277,6 +304,42 @@ def build_fundamentals(smoke: bool = False, quarters: list[str] | None = None) -
     out_path.parent.mkdir(parents=True, exist_ok=True)
     merged.to_parquet(out_path, index=False)
     LOGGER.info("wrote %d rows -> %s", len(merged), out_path)
+    del merged
+    gc.collect()
+    build_quarterly_table(smoke=smoke, quarters=quarters)
+    return str(out_path)
+
+
+def build_quarterly_table(smoke: bool = False, quarters: list[str] | None = None) -> str:
+    """Build ``quarterly.parquet``: a trailing-twelve-month row per usable 10-Q (:mod:`lti.quarterly`).
+
+    Reads the same standardized statements as :func:`build_fundamentals` — the
+    pipeline keeps 10-Qs alongside 10-Ks — and the annual table it wrote, so it
+    can run on its own (``lti build-quarterly``) without rebuilding that.
+    """
+    from lti import quarterly
+
+    paths = config.get_paths()
+    annual = load_fundamentals(smoke=smoke, quarterly=False)
+    if smoke:
+        frames = _smoke_standardized_frames(quarters or _SMOKE_DEFAULT_QUARTERS, forms=("10-K", "10-Q"))
+        bs_raw, is_raw, cf_raw = frames["BS"], frames["IS"], frames["CF"]
+    else:
+        LOGGER.info("loading concatenated standardized bags for the 10-Qs")
+        bs_raw = _standardized_result_df(paths.concat_std_bs)
+        is_raw = _standardized_result_df(paths.concat_std_is)
+        cf_raw = _standardized_result_df(paths.concat_std_cf)
+    idx = sec_update.index_dataframe()[["adsh", "cik", "name", "form", "filed", "period"]]
+    rows = quarterly.build_quarterly(
+        bs_raw, is_raw, cf_raw, idx, annual,
+        cik_map=tickers.get_cik_ticker_map(),
+        sic_map=rawtags.build_sic_map(),
+        raw_bs=rawtags.build_raw_bs_tags(),
+        raw_shares=rawtags.build_raw_share_tags(),
+    )
+    out_path = paths.quarterly_parquet
+    rows.to_parquet(out_path, index=False)
+    LOGGER.info("wrote %d trailing-twelve-month 10-Q rows -> %s", len(rows), out_path)
     return str(out_path)
 
 
@@ -289,19 +352,30 @@ def price_universe(fund: pd.DataFrame) -> list[str]:
     return sorted(fund.loc[mask, "ticker"].astype(str).unique().tolist())
 
 
-def load_fundamentals(smoke: bool | None = None) -> pd.DataFrame:
+def load_fundamentals(smoke: bool | None = None, quarterly: bool = True) -> pd.DataFrame:
+    """The fundamentals table: a row per 10-K, and — with ``quarterly`` and a built
+    ``quarterly.parquet`` — a trailing-twelve-month row per usable 10-Q after them
+    (``form == "10-Q"``; :func:`lti.pit.annual` strips them again)."""
     paths = config.get_paths()
     path = paths.fundamentals_parquet
+    qpath = paths.quarterly_parquet
     if smoke is True:
-        path = paths.derived_dir / "fundamentals.smoke.parquet"
+        path, qpath = paths.derived_dir / "fundamentals.smoke.parquet", paths.derived_dir / "quarterly.smoke.parquet"
     elif smoke is False:
-        path = paths.derived_dir / "fundamentals.parquet"
+        path, qpath = paths.derived_dir / "fundamentals.parquet", paths.derived_dir / "quarterly.parquet"
     if not path.exists():
         raise FileNotFoundError(f"{path} not found — run `lti build-fundamentals`")
     df = pd.read_parquet(path)
     if "filed_prev" not in df.columns and "filed" in df.columns:
         # built before the column existed; it derives exactly from what's here
         df = _lag_prior_period(df, {"filed": "filed_prev"})
+    if "free_cash_flow_reported" not in df.columns:
+        # built before stock-based pay came out of free cash flow; likewise
+        df = add_free_cash_flow(df)
+    if quarterly and qpath.exists():
+        q = pd.read_parquet(qpath)
+        if not q.empty:
+            df = pd.concat([df, q], ignore_index=True)
     return df
 
 
@@ -309,6 +383,8 @@ def coverage_report(df: pd.DataFrame | None = None) -> pd.DataFrame:
     """Per-column non-null coverage plus cik / ticker / per-year counts."""
     if df is None:
         df = load_fundamentals()
+    n_ttm = int((df["form"] == "10-Q").sum()) if "form" in df.columns else 0
+    df = df[df["form"] != "10-Q"] if n_ttm else df
 
     n = len(df)
     non_null = (df.notna().sum() / n * 100).round(1).rename("pct_non_null")
@@ -329,6 +405,7 @@ def coverage_report(df: pd.DataFrame | None = None) -> pd.DataFrame:
         }
     )
     print(summary.to_string(index=False))
+    print(f"(and {n_ttm:,} trailing-twelve-month rows from 10-Qs — `lti build-quarterly`)")
     print()
     print("rows per fiscal_year:")
     print(df.groupby("fiscal_year").size().to_string())

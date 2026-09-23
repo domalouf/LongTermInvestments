@@ -30,6 +30,8 @@ ARTIFACTS = [
     ("Price cache (split-adjusted)", paths.close_parquet, "lti fetch-prices"),
     ("Split history", paths.splits_parquet, "lti fetch-prices"),
     ("Dividend history", paths.dividends_parquet, "lti fetch-prices"),
+    ("Interest rates", paths.rates_parquet, "lti fetch-rates"),
+    ("Fama-French factors", paths.factors_parquet, "lti fetch-factors"),
 ]
 
 present = [(n, p, c) for n, p, c in ARTIFACTS if p.exists()]
@@ -77,13 +79,17 @@ st.header("Fundamentals")
 try:
     from lti import fundamentals
 
-    fund = fundamentals.load_fundamentals()
+    everything = fundamentals.load_fundamentals()
+    fund = everything[everything["form"] != "10-Q"] if "form" in everything.columns else everything
+    n_ttm = len(everything) - len(fund)
     _universe = set(fundamentals.price_universe(fund))
     with_ticker = fund.loc[fund["ticker"].notna(), "cik"].nunique()
     all_cik = fund["cik"].nunique()
 
     m = st.columns(4)
-    m[0].metric("Filings", f"{len(fund):,}")
+    m[0].metric("10-K filings", f"{len(fund):,}",
+                help=f"And {n_ttm:,} trailing-twelve-month rows from 10-Qs, which keep a screen on the "
+                     "latest quarter — `lti build-quarterly` if that's 0.")
     m[1].metric("Companies", f"{all_cik:,}")
     # not a delta — a green up-arrow on a shortfall reads exactly backwards
     m[2].metric("With a ticker", f"{with_ticker:,}",
@@ -162,7 +168,7 @@ st.header("Price cache")
 if _panel.empty:
     st.info("No prices cached yet. Run `lti fetch-prices`.")
 else:
-    p = st.columns(6)
+    p = [*st.columns(3), *st.columns(3)]  # six in a row cut the dates and labels short
     p[0].metric("Tickers", f"{_panel.shape[1]:,}")
     p[1].metric("From", str(_panel.index.min().date()))
     p[2].metric("To", str(_panel.index.max().date()))

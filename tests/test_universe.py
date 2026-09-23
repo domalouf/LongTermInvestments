@@ -231,7 +231,8 @@ def world():
 def test_universe_benchmark_is_every_ranked_stock_equal_weighted(world):
     fund, px = world
     cfg = BacktestConfig(
-        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=2), start="2012-01-01", end="2020-06-01", market_cap_min=0.0
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=2), start="2012-01-01", end="2020-06-01", market_cap_min=0.0,
+        cost_bps=0.0,  # gross, so the equal-weight arithmetic below is exact
     )
     r = run_backtest(cfg, fund, px)
     ps = r.period_summary
