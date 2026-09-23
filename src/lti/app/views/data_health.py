@@ -168,7 +168,7 @@ st.header("Price cache")
 if _panel.empty:
     st.info("No prices cached yet. Run `lti fetch-prices`.")
 else:
-    p = st.columns(6)
+    p = [*st.columns(3), *st.columns(3)]  # six in a row cut the dates and labels short
     p[0].metric("Tickers", f"{_panel.shape[1]:,}")
     p[1].metric("From", str(_panel.index.min().date()))
     p[2].metric("To", str(_panel.index.max().date()))

@@ -28,6 +28,16 @@ _DIVISIONS: list[tuple[int, int, str]] = [
     (9100, 9729, "Public Administration"),
 ]
 
+# The longer division names, shortened for where the full one won't fit (a stat tile).
+DIVISION_SHORT: dict[str, str] = {
+    "Agriculture, Forestry & Fishing": "Agriculture",
+    "Transportation & Public Utilities": "Transport & utilities",
+    "Wholesale Trade": "Wholesale",
+    "Retail Trade": "Retail",
+    "Finance, Insurance & Real Estate": "Finance",
+    "Public Administration": "Public admin",
+}
+
 # Fama and French's 12 industries (Ken French's Siccodes12): fine enough to show a
 # theme, where the divisions above can't — "Manufacturing" is half the market,
 # drugs, chips, cars and food alike. A code in none of these ranges is "Other":

@@ -66,7 +66,8 @@ if not annual.empty:
     c2.metric("Fiscal years", f"{int(annual['fiscal_year'].min())}–{int(annual['fiscal_year'].max())}")
 if psym:
     ps = panel[psym].dropna()
-    c3.metric("Price history", f"{ps.index.min().date()} → {ps.index.max().date()}")
+    c3.metric("Price history", f"{ps.index.min():%Y}–{ps.index.max():%Y}",
+              help=f"{ps.index.min().date()} to {ps.index.max().date()}, {len(ps):,} trading days.")
     if len(ps) > 1:
         c4.metric("Total price return", f"{ps.iloc[-1] / ps.iloc[0] - 1:.0%}")
 else:

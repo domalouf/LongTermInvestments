@@ -37,6 +37,12 @@ def _signed(v: float) -> str:
     return f"{'−' if v < 0 else '+'}${abs(v):,.0f}"
 
 
+def _tile(v: float, signed: bool = False) -> str:
+    """Dollars for a stat tile, which is narrow: whole dollars, or millions from $1M."""
+    sign = "−" if v < 0 else ("+" if signed else "")
+    return f"{sign}${abs(v) / 1e6:,.2f}M" if abs(v) >= 1e6 else f"{sign}${abs(v):,.0f}"
+
+
 # Cell formats for the tables. A Styler rather than column_config formats, which
 # can't group thousands or put a sign before the $. Neither can do anything about a
 # missing value — the grid draws every null as "None" — so the tables below are
@@ -148,29 +154,29 @@ s = acct.summary
 years = s["years"]
 
 k = st.columns(5)
-k[0].metric("Value", f"${s['value']:,.0f}", help=f"Cash ${s['cash']:,.0f} of it.")
+k[0].metric("Value", _tile(s["value"]), help=f"${s['value']:,.0f}, with ${s['cash']:,.0f} of it in cash.")
 k[1].metric(
-    "Money in, net", f"${s['net_deposits']:,.0f}",
-    help="Deposits less withdrawals"
+    "Money in, net", _tile(s["net_deposits"]),
+    help=f"${s['net_deposits']:,.0f}: deposits less withdrawals"
          + (f", with ${s['implicit_deposits']:,.0f} counted from buys beyond the cash on hand." if s["implicit_deposits"] else "."),
 )
-k[2].metric("Gain", _signed(s["gain"]),
+k[2].metric("Gain", _tile(s["gain"], signed=True),
             f"{s['gain'] / s['net_deposits']:+.1%}" if s["net_deposits"] > 0 else None)
 k[3].metric(
-    "Against SPY", _signed(s["vs_spy"]) if pd.notna(s["vs_spy"]) else "—",
+    "Against SPY", _tile(s["vs_spy"], signed=True) if pd.notna(s["vs_spy"]) else "—",
     help=f"The same money, on the same days, in SPY would be worth ${s['spy_same_flows']:,.0f} now."
     if pd.notna(s["spy_same_flows"]) else "SPY isn't in the price cache.",
 )
 if years >= 1 and pd.notna(s["money_weighted"]):
     spy_mw = s["spy_money_weighted"]
     # the delta is the gap to SPY, so its colour says ahead or behind — not SPY's own return
-    k[4].metric("Money-weighted return", f"{s['money_weighted']:+.1%} a year",
+    k[4].metric("Return a year", f"{s['money_weighted']:+.1%}",
                 f"{(s['money_weighted'] - spy_mw) * 100:+.1f} pts vs SPY" if pd.notna(spy_mw) else None,
-                help="The rate your deposits and withdrawals, and what's there now, work out to (XIRR)."
+                help="Money-weighted (XIRR): the rate your deposits and withdrawals, and what's there now, work out to."
                      + (f" The same flows in SPY work out to {spy_mw:+.1%} a year." if pd.notna(spy_mw) else ""))
 else:
-    k[4].metric("Money-weighted return", "—", help="Shown after a year: a few months' return, annualized, "
-                                                    "says more about the calendar than about you.")
+    k[4].metric("Return a year", "—", help="Shown after a year: a few months' return, annualized, "
+                                            "says more about the calendar than about you.")
 
 st.header("The account against the same money in SPY")
 d = acct.daily
@@ -189,8 +195,8 @@ theme.show(fig, height=400, hovermode="x unified", yaxis=dict(tickprefix="$", ti
 if pd.notna(s["time_weighted_pa"]) and years >= 1:
     theme.note(
         f"Time-weighted, which takes the timing of your deposits out: <b>{s['time_weighted_pa']:+.1%}</b> a year "
-        f"against SPY's {s['spy_return_pa']:+.1%} over the same {years:.1f} years. The money-weighted figure "
-        "above counts the timing in — both are right, they answer different questions."
+        f"against SPY's {s['spy_return_pa']:+.1%} over the same {years:.1f} years. The return a year "
+        "above is money-weighted, which counts the timing in — both are right, they answer different questions."
     )
 
 st.header("Stocks you picked, against funds")
