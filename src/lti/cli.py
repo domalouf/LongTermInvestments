@@ -100,6 +100,32 @@ def cmd_fetch_rates(args: argparse.Namespace) -> None:
                   f"latest {s.iloc[-1]:.2%}")
 
 
+def cmd_fetch_factors(args: argparse.Namespace) -> None:
+    from lti import attribution
+
+    try:
+        table = attribution.fetch_factors()
+    except RuntimeError as exc:
+        raise SystemExit(f"lti fetch-factors: {exc}") from None
+    print(f"  {', '.join(table.columns)}: {len(table):,} months, "
+          f"{table.index.min():%Y-%m} to {table.index.max():%Y-%m}")
+
+
+def _print_attribution(result, model: str) -> None:
+    from lti import attribution
+
+    try:
+        a = attribution.attribute(result, attribution.load_factors(), model)
+    except ValueError as exc:
+        print(f"\n(no factor regression: {exc})")
+        return
+    span = f", {a.months[0]:%Y-%m} to {a.months[1]:%Y-%m}" if a.months else ""
+    print(f"\n=== skill or style: {attribution.MODEL_LABELS[model]}{span} ===")
+    print("(loadings with Newey-West t-stats; alpha is what the factors leave unexplained, a year)")
+    print(attribution.as_text(a).to_string())
+    _print_warnings(a.warnings)
+
+
 def cmd_coverage(args: argparse.Namespace) -> None:
     from lti import fundamentals
 
@@ -232,6 +258,8 @@ def cmd_backtest(args: argparse.Namespace) -> None:
     print("\n=== period summary ===")
     print(result.period_summary.to_string(index=False))
     _print_warnings(result.warnings)
+    if args.attribution:
+        _print_attribution(result, args.factor_model)
 
 
 def cmd_rolling_backtest(args: argparse.Namespace) -> None:
@@ -640,6 +668,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fr.set_defaults(func=cmd_fetch_rates)
 
+    ff = sub.add_parser("fetch-factors", help="cache the Fama-French factors from Ken French's data library")
+    ff.set_defaults(func=cmd_fetch_factors)
+
     cv = sub.add_parser("coverage", help="print fundamentals coverage report")
     cv.set_defaults(func=cmd_coverage)
 
@@ -667,6 +698,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bt.add_argument("--exclude-financials", action="store_true", help="drop SIC 6000-6799")
     bt.add_argument("--exclude-utilities", action="store_true", help="drop SIC 4900-4999")
+    bt.add_argument(
+        "--attribution", action="store_true",
+        help="regress the strategy, its universe, the gap between them and SPY on the Fama-French factors "
+             "(`lti fetch-factors` first)",
+    )
+    bt.add_argument("--factor-model", choices=["capm", "ff3", "ff5", "ff5_mom"], default="ff5_mom")
     _add_friction_args(bt)
     bt.set_defaults(func=cmd_backtest)
 

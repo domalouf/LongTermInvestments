@@ -31,6 +31,7 @@ ARTIFACTS = [
     ("Split history", paths.splits_parquet, "lti fetch-prices"),
     ("Dividend history", paths.dividends_parquet, "lti fetch-prices"),
     ("Interest rates", paths.rates_parquet, "lti fetch-rates"),
+    ("Fama-French factors", paths.factors_parquet, "lti fetch-factors"),
 ]
 
 present = [(n, p, c) for n, p, c in ARTIFACTS if p.exists()]

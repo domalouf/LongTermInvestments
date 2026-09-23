@@ -539,3 +539,18 @@ def test_dated_valuations_discount_at_the_rates_of_their_date(fund, panel):
     assert len(listed_low) >= len(listed_high)  # and more names clear the positive-upside floor
     # nothing cached is the fixed 9% of before
     assert market_assumptions("2020-06-01", PriceData(panel, panel, empty_splits()).rates).discount_rate == 0.09
+
+
+def test_a_backtest_can_be_attributed_to_factors(fund, px):
+    from lti import attribution
+
+    r = run_backtest(_frictions_cfg(cost_bps=0.0), fund=fund, px=px)
+    months = pd.date_range("2011-01-31", "2021-06-30", freq="ME")
+    rng = np.random.default_rng(0)
+    factors = pd.DataFrame(rng.normal(0, 0.03, (len(months), 6)), index=months,
+                           columns=["mkt_rf", "smb", "hml", "rmw", "cma", "mom"]).assign(rf=0.0)
+    a = attribution.attribute(r, factors)
+    # every month of the backtest between its first and last rebalance, whole months only
+    assert a.n["Strategy"] == len(attribution.monthly_returns(r.equity_curve)) > 90
+    assert a.coef.notna().all().all()
+    assert a.months[0] == pd.Timestamp("2012-04-30")

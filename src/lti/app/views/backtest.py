@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from lti import attribution
 from lti.app import theme, widgets
 from lti.backtest import BacktestConfig, rebalance_month_spread, run_backtest
 from lti.ranking import ScreenSpec
@@ -343,6 +345,62 @@ if not period_summary.empty and period_summary["top_industry_share"].notna().any
         yaxis=dict(tickformat=".0%", title="largest industry's share", rangemode="tozero"),
         xaxis=dict(title="", dtick=1),
     )
+
+st.header("Skill or style?")
+factors = attribution.load_factors()  # small; read fresh so a fetch shows up on the next run
+if factors.empty:
+    theme.note(
+        "A screen that beats its universe may just own smaller, cheaper or more profitable companies — tilts "
+        "an index fund can buy. A regression on the Fama-French factors separates the two: run "
+        "<code>lti fetch-factors</code> to cache them."
+    )
+else:
+    model = st.radio(
+        "Factors", list(attribution.MODELS), index=list(attribution.MODELS).index("ff5_mom"),
+        format_func=attribution.MODEL_LABELS.get, horizontal=True,
+    )
+    fit = attribution.attribute(
+        SimpleNamespace(equity_curve=equity, universe_curve=universe, benchmark_curve=bench), factors, model
+    )
+    edge = "Strategy − universe"
+    if fit.n[edge] > 0:
+        loads = fit.coef[edge].drop("alpha")
+        tvals = fit.t[edge].drop("alpha")
+        fig_f = go.Figure(
+            go.Bar(
+                y=[attribution.TERM_LABELS[f] for f in loads.index], x=loads, orientation="h",
+                marker_color=[theme.POS if v >= 0 else theme.NEG for v in loads],
+                customdata=tvals, hovertemplate="%{y}: %{x:+.2f} (t %{customdata:.1f})<extra></extra>",
+            )
+        )
+        theme.bar_marks(fig_f, color=None)
+        theme.zero_line(fig_f, axis="x")
+        alpha, t_alpha = fit.coef.at["alpha", edge], fit.t.at["alpha", edge]
+        gap = stats.get("excess_cagr_vs_univ", float("nan"))
+        biggest = loads.abs().idxmax()
+        verdict = (
+            "indistinguishable from none — the edge is the tilts" if abs(t_alpha) < 2
+            else "the part the tilts don't explain"
+        )
+        theme.note(
+            f"Against its universe the strategy returned <b>{gap:+.1%}</b> a year. The factors leave "
+            f"<b>{alpha:+.1%}</b> a year of that unexplained (t {t_alpha:.1f}): {verdict}. Its biggest tilt "
+            f"against the universe is <b>{attribution.TERM_LABELS[biggest].lower()}</b> ({loads[biggest]:+.2f}). "
+            f"SPY loads {fit.coef.at['mkt_rf', 'SPY']:.2f} on the market, a check that the returns line up "
+            "with the factors."
+        )
+        theme.show(fig_f, height=60 + 38 * len(loads), legend=False,
+                   xaxis=dict(title="strategy − universe: loading on each factor"), yaxis=dict(title="", autorange="reversed"))
+    with st.expander("All four regressions"):
+        st.dataframe(attribution.as_text(fit), width="stretch")
+        span = f"{fit.months[0]:%b %Y} to {fit.months[1]:%b %Y}" if fit.months else "no overlapping months"
+        st.caption(
+            f"Monthly returns, {span}, on {attribution.MODEL_LABELS[model]} from Ken French's data library; "
+            "Newey-West t-stats. The strategy and universe can only hold survivors, while the factors come from "
+            "every stock, so their own alphas carry survivorship bias — strategy − universe largely nets it out. "
+            "The curves are after the costs and taxes set in the sidebar."
+        )
+    widgets.warnings_expander(fit.warnings)
 
 st.header("Does the rebalance month matter?")
 theme.note(

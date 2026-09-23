@@ -59,6 +59,7 @@ lti fetch-prices                 # thousands of tickers via yfinance — takes a
                                  # (plus whatever your portfolio holds, index funds included)
 lti refresh-prices              # later: cheap daily top-up of already-cached tickers
 lti fetch-rates                 # the 10-year Treasury and AAA yields from FRED, which valuation discounts at
+lti fetch-factors               # the Fama-French factors, for `lti backtest --attribution`
 
 # 4. Backtest a strategy (rebalanced each April; vs SPY and vs its own universe),
 #    after 10 bps a trade — see "Trading costs and taxes" below
@@ -70,6 +71,7 @@ lti rolling-backtest --metrics pe,debt_to_equity --top-n 10 --windows 3,5   # ov
 #     --hold-past-year        wait a year and a day between rebalances, so every gain is long-term
 #     --sell-rank 60          with --top-n 30: keep a holding until it drops out of the top 60
 #     --industry-cap 0.2      at most 20% of the picks in any one industry
+#     --attribution           regress the result on the Fama-French factors: skill or style?
 
 # 4a. Greenblatt's Magic Formula (EBIT/EV + return on capital, no financials/utilities)
 lti backtest --magic-formula --top-n 30 --start 2013-01-01
@@ -325,6 +327,37 @@ manufacturing rather than off a theme. A company with no SIC code is never cappe
 holdings under a sell buffer count toward their industry but aren't sold to make room.
 Each holding records its `industry`. Off by default (`industry_cap = None`).
 
+### Skill or style: a factor regression
+
+A screen that beats its universe may simply own smaller, cheaper or more profitable
+companies than the universe does — tilts an index fund can buy, and that the academic
+factors already price. Regressing monthly returns on Fama and French's factors separates
+the two (`lti.attribution`): the loadings are the tilts, and the intercept, **alpha**, is
+what's left — the part of the return the tilts don't explain.
+
+`lti fetch-factors` caches Ken French's monthly five factors (market, size, value,
+profitability, investment, and the T-bill rate) and his momentum factor. Then every
+backtest can be regressed four ways — `lti backtest ... --attribution`, or *Skill or
+style?* on the Backtest page:
+
+| regression | what it says |
+| --- | --- |
+| strategy − T-bill | the strategy's tilts, and its alpha against the factors |
+| universe − T-bill | the tilts the screen inherits just from what it picks among |
+| **strategy − universe** | the ranking's edge, and what's left of it once the tilts it adds are accounted for |
+| SPY − T-bill | a calibration: about 1 on the market, next to nothing else, alpha near zero |
+
+The page leads with the third: the strategy's CAGR over its universe, how much of it the
+factors leave unexplained and with what t-stat, and its biggest tilt against the universe.
+Models run from the market alone (CAPM) through Fama-French 3 and 5 to 5 plus momentum (the
+default); `--factor-model` picks one. Standard errors are Newey-West, and only whole calendar
+months count, so a backtest's first-trading-day rebalances don't split a month. Two caveats:
+the strategy and universe can only hold survivors while the factors are built from every
+stock, so their own alphas carry the survivorship bias (strategy − universe largely nets it
+out); and a dozen years of monthly returns is little evidence — an alpha with a t-stat under
+2 is indistinguishable from none. The curves are regressed as reported, so after costs and
+taxes when the backtest charges them.
+
 ## GUI
 
 ```bash
@@ -434,7 +467,9 @@ Sharpe), full stats table, **What trading and taxes took** (each portfolio's CAG
 and after, costs and taxes a year, the CAGR if sold at the end, turnover and the share of
 gains taxed short-term), a **survivorship-bias callout**, per-period
 excess returns against either benchmark, **Was it one theme?** (the largest industry's
-share of the portfolio at each rebalance, against the cap if one is set), **Does the
+share of the portfolio at each rebalance, against the cap if one is set), **Skill or
+style?** (the factor regression above: the edge over the universe split into tilts and
+alpha, with all four regressions in an expander), **Does the
 rebalance month matter?** (the same
 strategy run once per month — with a dozen annual rebalances, the month alone can decide
 whether a screen beats its universe), the per-period summary, a holdings expander (every
@@ -787,6 +822,7 @@ src/lti/
   ranking.py       ScreenSpec + composite percentile-rank selection
   backtest.py      annual-rebalance engine, universe benchmark, rebalance-month spread
   frictions.py     trading costs and taxes: a portfolio as tax lots, rebalanced and marked forward
+  attribution.py   Fama-French factor regressions of a backtest: tilts against alpha
   rolling.py       reruns the backtest over every N-year window in the price history
   performance.py   CAGR / drawdown / Sharpe / hit rate / turnover
   progress.py      `lti progress` per-stage pipeline dashboard

@@ -77,6 +77,7 @@ class Paths:
     dividends_parquet: Path
     prices_meta_parquet: Path
     rates_parquet: Path  # the 10-year Treasury and AAA corporate yields (lti.rates)
+    factors_parquet: Path  # Fama-French factor returns, monthly (lti.attribution)
 
     # forward track record, decision journal and your own portfolio (append-only)
     track_dir: Path
@@ -146,6 +147,7 @@ def get_paths() -> Paths:
         dividends_parquet=prices / "dividends.parquet",
         prices_meta_parquet=prices / "_prices_meta.parquet",
         rates_parquet=prices / "rates.parquet",
+        factors_parquet=prices / "factors.parquet",
         track_dir=track,
         track_records_dir=track / "records",
         journal_jsonl=track / "journal.jsonl",
