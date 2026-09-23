@@ -112,7 +112,7 @@ if len(ranked_metrics) > 1:
 
 display_cols = [
     c
-    for c in ["rank", "ticker", "company", "sector", "fiscal_year", "filed", "price", "market_cap",
+    for c in ["rank", "ticker", "company", "sector", "form", "fiscal_year", "filed", "price", "market_cap",
               *ranked_metrics, *pct_cols, "composite_score"]
     if c in ranked.columns
 ]
@@ -123,6 +123,9 @@ col_cfg = {
     "ticker": st.column_config.TextColumn("Ticker", width="small"),
     "company": st.column_config.TextColumn("Company", width="medium"),
     "sector": st.column_config.TextColumn("Sector", width="medium"),
+    "form": st.column_config.TextColumn(
+        "From", width="small",
+        help="10-K: the fiscal year. 10-Q: the trailing twelve months to the latest quarter — see `lti build-quarterly`."),
     "fiscal_year": st.column_config.NumberColumn("FY", format="%d"),
     "filed": st.column_config.DateColumn("Filed", format="YYYY-MM-DD"),
     "price": st.column_config.NumberColumn("Price", format="$%.2f"),

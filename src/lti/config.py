@@ -63,6 +63,7 @@ class Paths:
     # our derived artifacts
     derived_dir: Path
     fundamentals_parquet: Path
+    quarterly_parquet: Path  # trailing-twelve-month rows from 10-Qs (lti.quarterly)
     cik_ticker_parquet: Path
     sic_parquet: Path
     raw_bs_tags_parquet: Path
@@ -135,6 +136,7 @@ def get_paths() -> Paths:
         concat_std_cf=concat_std / "CF",
         derived_dir=derived,
         fundamentals_parquet=derived / f"fundamentals{suffix}",
+        quarterly_parquet=derived / f"quarterly{suffix}",
         cik_ticker_parquet=derived / "cik_ticker.parquet",
         sic_parquet=derived / "sic_by_adsh.parquet",
         raw_bs_tags_parquet=derived / "raw_bs_tags.parquet",

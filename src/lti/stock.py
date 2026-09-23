@@ -77,6 +77,7 @@ def price_symbol(fund: pd.DataFrame, cik: int, panel: pd.DataFrame, preferred: s
 
 def annual_fundamentals(fund: pd.DataFrame, cik: int) -> pd.DataFrame:
     """One row per fiscal period for ``cik`` (latest restatement), metrics added."""
+    fund = pit.annual(fund)
     sub = fund[fund["cik"] == cik].copy()
     if sub.empty:
         return sub

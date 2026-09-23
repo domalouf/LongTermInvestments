@@ -554,3 +554,22 @@ def test_a_backtest_can_be_attributed_to_factors(fund, px):
     assert a.n["Strategy"] == len(attribution.monthly_returns(r.equity_curve)) > 90
     assert a.coef.notna().all().all()
     assert a.months[0] == pd.Timestamp("2012-04-30")
+
+
+def test_a_backtest_ranks_on_the_latest_10q_unless_told_not_to(fund, px):
+    # a trailing-twelve-month row per company each May, with debt/equity the other way round
+    ttm = fund.assign(
+        form="10-Q", basis="ttm",
+        period_end=lambda d: pd.to_datetime((d["fiscal_year"] + 1).astype(str) + "-03-31"),
+        filed=lambda d: pd.to_datetime((d["fiscal_year"] + 1).astype(str) + "-05-01"),
+        liabilities=lambda d: 200 + (7 - d["cik"]) * 30,
+    )
+    both = pd.concat([fund.assign(form="10-K"), ttm], ignore_index=True)
+    cfg = BacktestConfig(
+        screen=ScreenSpec(metrics=["debt_to_equity"], top_n=2), start="2013-01-01", end="2020-01-01",
+        market_cap_min=0.0, rebalance_month=7, cost_bps=0.0,
+    )
+    fresh = run_backtest(cfg, fund=both, px=px)
+    yearly = run_backtest(dataclasses.replace(cfg, quarterly=False), fund=both, px=px)
+    assert set(fresh.holdings["ticker"]) == {"T5", "T6"}  # the least levered by the 10-Qs
+    assert set(yearly.holdings["ticker"]) == {"T1", "T2"}  # and by the 10-Ks

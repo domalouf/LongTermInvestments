@@ -79,13 +79,17 @@ st.header("Fundamentals")
 try:
     from lti import fundamentals
 
-    fund = fundamentals.load_fundamentals()
+    everything = fundamentals.load_fundamentals()
+    fund = everything[everything["form"] != "10-Q"] if "form" in everything.columns else everything
+    n_ttm = len(everything) - len(fund)
     _universe = set(fundamentals.price_universe(fund))
     with_ticker = fund.loc[fund["ticker"].notna(), "cik"].nunique()
     all_cik = fund["cik"].nunique()
 
     m = st.columns(4)
-    m[0].metric("Filings", f"{len(fund):,}")
+    m[0].metric("10-K filings", f"{len(fund):,}",
+                help=f"And {n_ttm:,} trailing-twelve-month rows from 10-Qs, which keep a screen on the "
+                     "latest quarter — `lti build-quarterly` if that's 0.")
     m[1].metric("Companies", f"{all_cik:,}")
     # not a delta — a green up-arrow on a shortfall reads exactly backwards
     m[2].metric("With a ticker", f"{with_ticker:,}",

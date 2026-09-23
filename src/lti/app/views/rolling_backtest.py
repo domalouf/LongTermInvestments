@@ -34,6 +34,7 @@ def _run(cfg_key: str):
         market_cap_min=raw["market_cap_min"],
         sell_rank=raw.get("sell_rank"),
         industry_cap=raw.get("industry_cap"),
+        quarterly=raw.get("quarterly", True),
         **widgets.friction_kwargs(raw["frictions"]),
     )
     result = run_rolling_backtest(cfg)
@@ -46,6 +47,12 @@ with st.sidebar:
     top_n = st.slider("Top N", 5, 50, 10)
     sell_rank = widgets.sell_rank(top_n)
     industry_cap = widgets.industry_cap()
+    use_quarterly = st.checkbox(
+        "Use 10-Q filings", value=True,
+        help="Rank each company on its latest quarter — trailing twelve months from its 10-Qs — rather "
+             "than waiting up to a year for the next 10-K. Off ranks on 10-Ks alone, as before. Needs "
+             "`lti build-quarterly` (or a fresh `lti build-fundamentals`).",
+    )
     windows = st.multiselect("Window lengths (years)", [1, 2, 3, 5, 7, 10], default=[3, 5])
     step_months = st.slider("Step between window starts (months)", 1, 24, 12)
     start = st.text_input("Earliest start (blank = all the price history)", "")
@@ -78,6 +85,7 @@ cfg_key = json.dumps(
         "market_cap_min": cap_floor_m * 1e6,
         "sell_rank": sell_rank,
         "industry_cap": industry_cap,
+        "quarterly": use_quarterly,
         "frictions": fric,
     }
 )

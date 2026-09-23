@@ -1,6 +1,8 @@
 """Point-in-time snapshots (no look-ahead).
 
-:func:`snapshot_asof` is the filing view — which 10-Ks had been filed by a date.
+:func:`snapshot_asof` is the filing view — what had been filed by a date: each
+company's latest 10-K, or the trailing-twelve-month row of a later 10-Q
+(:mod:`lti.quarterly`) where the fundamentals table carries one.
 :func:`company_snapshot` and :func:`priced_snapshot` build the investable
 universe on top of it: per-share figures restated onto the price panels' share
 basis, non-operating filers dropped, metrics and prices attached. The screener,
@@ -14,6 +16,17 @@ import numpy as np
 import pandas as pd
 
 from lti import metrics, prices as prices_mod, sectors
+
+
+def annual(fund: pd.DataFrame) -> pd.DataFrame:
+    """``fund`` without its trailing-twelve-month 10-Q rows: one row per fiscal year.
+
+    For whatever counts years — the five-year history, a company's annual
+    record — rather than wanting the freshest numbers.
+    """
+    if "form" not in fund.columns or not (fund["form"] == "10-Q").any():
+        return fund
+    return fund[fund["form"] != "10-Q"]
 
 
 def snapshot_asof(

@@ -49,8 +49,10 @@ Configuration for `secfsdstools` is generated automatically: importing `lti` ren
 lti update --force
 #    (if the download already ran and you only need to re-run the pipeline: `lti pipeline`)
 
-# 2. Build the flat fundamentals table (data/derived/fundamentals.parquet)
+# 2. Build the flat fundamentals table (data/derived/fundamentals.parquet, plus
+#    quarterly.parquet: trailing-twelve-month rows from 10-Qs — see "Quarterly filings")
 lti build-fundamentals
+lti build-quarterly              # just the 10-Q rows, on an existing fundamentals table
 lti coverage
 
 # 3. Map CIKs to tickers, then cache prices for the universe (resumable)
@@ -128,6 +130,40 @@ backtest (2011–) from 16.0% to 6.9% a year, and the Magic Formula top-30 (2013
 way: ROIC's IC t-stat fell from 7.6 to 2.1, and P/B's from −4.2 to 0.0. Valuing on the
 dividend-adjusted price would flatter past dividend payers too, which is why valuation
 uses `close.parquet`.
+
+### Quarterly filings: trailing twelve months
+
+On 10-Ks alone a company's numbers were up to fifteen months old: an April screen ranked on
+December's year, an October screen on the same one. The SEC data sets carry every 10-Q too,
+and the standardization pipeline already keeps them, so `lti.quarterly` turns each into a row
+shaped exactly like an annual one, in `data/derived/quarterly.parquet` (built by `lti
+build-fundamentals`, or on its own by `lti build-quarterly` — no need to rerun the pipeline):
+
+- **Flows** are trailing twelve months: *last fiscal year + this year to date − the same
+  period a year earlier* — at a Q2 10-Q, FY2023 + H1 2024 − H1 2023. The year to date is the
+  filing's own; the other two come from the last 10-K and the year-earlier 10-Q, both filed
+  before it, so a backtest sees nothing early.
+- **The balance sheet** is the quarter-end one, as are the debt, fixed assets and share
+  counts read from the raw files. Shares are reconciled like a 10-K's, from the quarter's
+  own figures, and **EPS** is TTM net income over that count — EPS from different filings
+  can sit on different share bases.
+- **Operating income** counts as reported (for EBIT/EV and ROIC) only when the last 10-K
+  tagged it; **a year ago** (`revenues_prev`, `eps_prev` …) is the year-earlier 10-Q's TTM row,
+  so growth compares like with like.
+- **Only when it holds:** a 10-Q becomes a row only if the last 10-K ends 3, 6 or 9 months
+  before it — matching the quarters its year to date covers — the year-earlier 10-Q exists,
+  and revenue, net income, operating cash flow and equity all come out. Otherwise the
+  snapshot falls back to the 10-K, exactly as before.
+
+`load_fundamentals()` appends the rows (`form = "10-Q"`, `basis = "ttm"`), so every
+point-in-time snapshot — the screens, backtests, factor analysis, the Undervalued list —
+takes each company's latest filing, 10-K or 10-Q. What counts years ignores them
+(`pit.annual`): the five-year normalized earnings and consistency, the Stock page, and the
+pre-registered factor study, which stays on 10-Ks as registered. The Backtest and Rolling
+pages' *Use 10-Q filings* (`--annual-only` on the CLI) switches them off, to see what the
+fresher numbers changed; the Screener's *From* column says which a row is. The five-year
+normalized EPS the Undervalued list values on is still annual — what gets fresher there is
+the latest year's EPS, the balance sheet and the price-based ratios.
 
 ### Share counts
 
@@ -450,7 +486,8 @@ PP&E, interest-bearing debt, as-reported operating income and share counts from 
 Sidebar builds the strategy (**Rank by**, **Top N**, **Start/End**, **Rebalance month** —
 April by default, when calendar-year 10-Ks are in; in January a screen ranks on
 fundamentals a median of a year old — **Min market cap**, **Initial capital**, and the sell
-buffer: **Sell a holding once it drops out of the top** …, and **Most in one industry**)
+buffer: **Sell a holding once it drops out of the top** …, **Most in one industry**, and **Use
+10-Q filings**)
 and the
 **Costs and taxes** (trading cost, taxable account, the three rates, *Sell only after a
 full year* — see [Trading costs and taxes](#trading-costs-and-taxes)); hit **Run backtest**.
@@ -550,9 +587,9 @@ whether spreading it helps). The signals are real across
 the market; a concentrated screen on them isn't a way to collect them. Caveats: two
 seven-year halves, a survivor-only universe (which flatters distressed stocks and so
 works against Altman Z and quality in the first half), and published factors typically
-lose much of their edge after publication. Two later changes are held off so these numbers
-stay reproducible: the study measures free cash flow with stock-based pay still in it, and
-its backtests are gross of trading costs.
+lose much of their edge after publication. Three later changes are held off so these numbers
+stay reproducible: the study ranks on 10-Ks alone, not the fresher 10-Q rows; it measures free
+cash flow with stock-based pay still in it; and its backtests are gross of trading costs.
 
 ### 🔬 Stock detail — one company over time
 Sidebar: **Ticker** (matches the primary symbol *and* the full `tickers_all` list, so
@@ -809,6 +846,7 @@ src/lti/
   sec_update.py    wrappers around secfsdstools update / automation pipeline
   tickers.py       CIK <-> ticker map (primary = the SEC's first-listed security)
   fundamentals.py  build/load the flat fundamentals.parquet + coverage report
+  quarterly.py     trailing-twelve-month rows from 10-Qs, so a snapshot sees the latest quarter
   rawtags.py       SIC + debt / PP&E / goodwill / share counts straight from the raw SEC files
   sectors.py       SIC -> division and Fama-French industry, and the financials / utilities exclusions
   prices.py        yfinance cache: total-return + split-adjusted panels, split history (resumable)
@@ -843,13 +881,14 @@ tests/             pure-logic unit tests (no network / SEC data)
 ```
 
 `data/` (gitignored) holds everything generated: `data/sec/` (secfsdstools),
-`data/derived/` (fundamentals, ticker map), `data/prices/` (price panels, split and dividend history, interest rates),
+`data/derived/` (fundamentals and their 10-Q rows, ticker map), `data/prices/` (price panels, split and dividend history, interest rates),
 `data/track/` (the track record, the decision journal and your portfolio ledger — the one part
 that can't be rebuilt).
 
 ## Known limitations / v2 ideas
 
-- Annual (10-K) only; no quarterly rebalancing yet.
+- Rebalancing is annual, even though the fundamentals now include each 10-Q as trailing
+  twelve months; the five-year normalized figures are annual by design.
 - "Debt/equity" = total liabilities / equity (not just interest-bearing debt).
 - Share counts are the 10-K's (restated for splits, see above), so buybacks or issuance
   between the filing and the as-of date aren't in `market_cap` yet.

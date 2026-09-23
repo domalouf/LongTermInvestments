@@ -45,6 +45,7 @@ def _config(cfg_key: str) -> BacktestConfig:
         initial_capital=raw["initial_capital"],
         sell_rank=raw.get("sell_rank"),
         industry_cap=raw.get("industry_cap"),
+        quarterly=raw.get("quarterly", True),
         **widgets.friction_kwargs(raw["frictions"]),
     )
 
@@ -76,6 +77,12 @@ with st.sidebar:
     top_n = st.slider("Top N", 5, 50, 30 if magic else 10)
     sell_rank = widgets.sell_rank(top_n)
     industry_cap = widgets.industry_cap()
+    use_quarterly = st.checkbox(
+        "Use 10-Q filings", value=True,
+        help="Rank each company on its latest quarter — trailing twelve months from its 10-Qs — rather "
+             "than waiting up to a year for the next 10-K. Off ranks on 10-Ks alone, as before. Needs "
+             "`lti build-quarterly` (or a fresh `lti build-fundamentals`).",
+    )
     start = st.text_input("Start", "2013-01-01")
     end = st.text_input("End", "2024-01-01")
     rebal_month = st.slider(
@@ -107,6 +114,7 @@ cfg_key = json.dumps(
         "min_coverage": coverage,
         "sell_rank": sell_rank,
         "industry_cap": industry_cap,
+        "quarterly": use_quarterly,
         "frictions": fric,
     }
 )

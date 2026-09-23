@@ -47,6 +47,7 @@ class RollingConfig:
     hold_past_one_year: bool = False
     sell_rank: int | None = None  # as BacktestConfig: the buffer against turnover
     industry_cap: float | None = None  # and the most in any one industry
+    quarterly: bool = True  # and whether 10-Qs count
 
 
 @dataclass
@@ -120,6 +121,7 @@ def run_rolling_backtest(
                 hold_past_one_year=cfg.hold_past_one_year,
                 sell_rank=cfg.sell_rank,
                 industry_cap=cfg.industry_cap,
+                quarterly=cfg.quarterly,
             )
             try:
                 result = run_backtest(bt_cfg, fund=fund, px=px)

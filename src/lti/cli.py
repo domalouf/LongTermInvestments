@@ -45,8 +45,22 @@ def cmd_build_fundamentals(args: argparse.Namespace) -> None:
     if quarters:
         quarters = [q if q.endswith(".zip") else f"{q}.zip" for q in quarters]
     path = fundamentals.build_fundamentals(smoke=args.smoke, quarters=quarters)
-    print("wrote", path)
+    print("wrote", path, "and", config.get_paths().quarterly_parquet)
     fundamentals.coverage_report(fundamentals.load_fundamentals())
+
+
+def cmd_build_quarterly(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import fundamentals
+
+    quarters = args.quarters.split(",") if args.quarters else None
+    if quarters:
+        quarters = [q if q.endswith(".zip") else f"{q}.zip" for q in quarters]
+    path = fundamentals.build_quarterly_table(smoke=args.smoke, quarters=quarters)
+    rows = pd.read_parquet(path)
+    print(f"wrote {path}: {len(rows):,} trailing-twelve-month rows from 10-Qs, "
+          f"{rows['cik'].nunique():,} companies" if len(rows) else f"wrote {path}: no usable 10-Qs")
 
 
 def cmd_refresh_tickers(args: argparse.Namespace) -> None:
@@ -151,7 +165,7 @@ def _friction_kwargs(args: argparse.Namespace) -> dict:
         tax = TaxRates(short_term=args.short_term_tax, long_term=args.long_term_tax, dividends=args.dividend_tax)
     return dict(
         cost_bps=args.cost_bps, tax=tax, hold_past_one_year=args.hold_past_year,
-        sell_rank=args.sell_rank, industry_cap=args.industry_cap,
+        sell_rank=args.sell_rank, industry_cap=args.industry_cap, quarterly=not args.annual_only,
     )
 
 
@@ -163,6 +177,10 @@ def _add_friction_args(p: argparse.ArgumentParser) -> None:
         "--sell-rank", type=int, default=None,
         help="keep a holding until it drops out of the top SELL_RANK, not the top N: a buffer "
              "against turnover (e.g. --top-n 30 --sell-rank 60; default: no buffer)",
+    )
+    p.add_argument(
+        "--annual-only", action="store_true",
+        help="rank on 10-Ks alone, ignoring the trailing-twelve-month rows from 10-Qs",
     )
     p.add_argument(
         "--industry-cap", type=float, default=None,
@@ -213,6 +231,7 @@ def _screen_from_json(path: str):
         hold_past_one_year=raw.get("hold_past_one_year", False),
         sell_rank=raw.get("sell_rank"),
         industry_cap=raw.get("industry_cap"),
+        quarterly=raw.get("quarterly", True),
     )
 
 
@@ -637,6 +656,14 @@ def build_parser() -> argparse.ArgumentParser:
     bf.add_argument("--smoke", action="store_true")
     bf.add_argument("--quarters", help="comma-separated, e.g. 2022q1,2022q2")
     bf.set_defaults(func=cmd_build_fundamentals)
+
+    bq = sub.add_parser(
+        "build-quarterly",
+        help="build quarterly.parquet: trailing-twelve-month rows from 10-Qs, without rebuilding the 10-Ks",
+    )
+    bq.add_argument("--smoke", action="store_true")
+    bq.add_argument("--quarters", help="comma-separated, e.g. 2022q1,2022q2 (smoke only)")
+    bq.set_defaults(func=cmd_build_quarterly)
 
     rt = sub.add_parser("refresh-tickers", help="refresh cik->ticker map")
     rt.set_defaults(func=cmd_refresh_tickers)

@@ -66,6 +66,9 @@ class BacktestConfig:
     # (lti.sectors.industry), passing over a name whose industry is full for the
     # next one down the ranking. None: no cap
     industry_cap: float | None = None
+    # rank on each company's latest 10-Q, as trailing twelve months, where the
+    # fundamentals carry one (lti.quarterly); False ranks on 10-Ks alone
+    quarterly: bool = True
 
     @property
     def has_frictions(self) -> bool:
@@ -163,6 +166,8 @@ def run_backtest(
         fund = load_fundamentals()
     if px is None:
         px = prices_mod.load_price_data()
+    if not cfg.quarterly:
+        fund = pit.annual(fund)
 
     warnings: list[str] = []
     bench = cfg.benchmark.upper()

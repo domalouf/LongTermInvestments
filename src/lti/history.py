@@ -66,6 +66,7 @@ def history_asof(fund: pd.DataFrame, asof, years: int = HISTORY_YEARS) -> pd.Dat
     One row per ``(cik, period_end)``: the latest filing for that period filed
     on or before ``asof``. Sorted by cik, then period.
     """
+    fund = pit.annual(fund)  # years, not the 10-Qs' trailing twelve months
     known = fund[fund["filed"] <= pd.Timestamp(asof)]
     per_period = known.sort_values(["cik", "period_end", "filed"]).drop_duplicates(["cik", "period_end"], keep="last")
     return per_period.groupby("cik", sort=False).tail(years)

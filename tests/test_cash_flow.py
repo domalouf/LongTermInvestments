@@ -53,7 +53,10 @@ def test_a_table_built_before_the_change_is_upgraded_on_load(tmp_path, monkeypat
     path = tmp_path / "fundamentals.parquet"
     old.to_parquet(path, index=False)
     monkeypatch.setattr(
-        fundamentals.config, "get_paths", lambda: SimpleNamespace(fundamentals_parquet=path, derived_dir=tmp_path)
+        fundamentals.config, "get_paths",
+        lambda: SimpleNamespace(
+            fundamentals_parquet=path, derived_dir=tmp_path, quarterly_parquet=tmp_path / "quarterly.parquet"
+        ),
     )
 
     df = fundamentals.load_fundamentals()

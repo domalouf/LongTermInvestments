@@ -21,10 +21,11 @@ code, before any result:
 ``profit_years`` isn't among the hypotheses: step 2 of this project already
 looked at it across the whole sample, so it can't be tested out of sample here.
 
-Two things the rest of the project changed after registration are held at what
-they were, so the published results stay reproducible: free cash flow is
-measured before stock-based pay was netted out of it (:func:`as_registered`),
-and the backtests are gross of trading costs.
+Three things the rest of the project changed after registration are held at
+what they were, so the published results stay reproducible: the fundamentals
+are 10-Ks only, not the fresher 10-Q rows; free cash flow is measured before
+stock-based pay was netted out of it (both :func:`as_registered`); and the
+backtests are gross of trading costs.
 """
 
 from __future__ import annotations
@@ -100,9 +101,13 @@ def _signed(summary: pd.DataFrame, metric: str, sign: int, col: str) -> float:
 
 
 def as_registered(fund: pd.DataFrame) -> pd.DataFrame:
-    """``fund`` with free cash flow as the study was registered on — operating
-    cash flow less capex, with stock-based pay still in it (see
+    """``fund`` as the study was registered on: 10-Ks only (no trailing-twelve-month
+    10-Q rows, :mod:`lti.quarterly`), and free cash flow as operating cash flow
+    less capex, with stock-based pay still in it (see
     :func:`lti.fundamentals.add_free_cash_flow`)."""
+    from lti import pit
+
+    fund = pit.annual(fund)
     if "free_cash_flow_reported" not in fund.columns:
         return fund
     return fund.assign(free_cash_flow=fund["free_cash_flow_reported"])
