@@ -12,7 +12,7 @@
 tunnel: <TUNNEL-UUID>
 credentials-file: /home/<USER>/.cloudflared/<TUNNEL-UUID>.json
 
-# Some home-router NATs drop QUIC's UDP flows (this bit the Pi tunnel); http2 is
+# Some home-router NATs drop QUIC's UDP flows (this bit the domalouf.com tunnel); http2 is
 # the safe transport here too.
 protocol: http2
 

@@ -9,8 +9,6 @@ How the investing tools reach the web.
 
 Everything runs on the **server** (`lts`), which also runs the HealthBoard stack that
 serves domalouf.com, so the snapshot is copied straight into the local web root.
-(domalouf.com used to be served from a 32-bit Raspberry Pi that couldn't run the
-Python stack; it moved to `lts` on 2026-09-27.)
 
 ---
 
@@ -62,7 +60,7 @@ git pull && pip install -e .            # picks up refresh-prices + the renderer
 
 # smoke-test by hand first (writes to the live web root):
 ./deploy/publish-undervalued.sh
-#   or dry-run locally:  LTI_PI_DEST="$PWD/build/_test/" ./deploy/publish-undervalued.sh
+#   or dry-run locally:  LTI_DEST="$PWD/build/_test/" ./deploy/publish-undervalued.sh
 
 # install the timer as a user service
 mkdir -p ~/.config/systemd/user
@@ -95,7 +93,7 @@ Set these as `Environment=` lines in `~/.config/systemd/user/lti-undervalued.ser
 | Var | Default | |
 | --- | --- | --- |
 | `LTI_TOP_N` | `40` | rows published |
-| `LTI_PI_DEST` | `~/HealthBoard/piStuff/website/invest/` | rsync target |
+| `LTI_DEST` | `~/HealthBoard/piStuff/website/invest/` | rsync target |
 | `LTI_UNDERVALUED_ARGS` | — | extra `lti undervalued` flags, e.g. `--min-models 4 --market-cap-min 2000` |
 | `LTI_SKIP_PRICES` | — | `1` to skip the price refresh |
 | `LTI_TRACK_BACKUP` | unset (commented out in the shipped unit) | where to copy `data/track/` after each record; unset, it stays on this machine only |
