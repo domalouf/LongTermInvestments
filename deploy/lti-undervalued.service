@@ -11,11 +11,12 @@ ExecStart=%h/Projects/LongTermInvestments/deploy/publish-undervalued.sh
 # yfinance can stall; don't let a hung run block the next night.
 TimeoutStartSec=1800
 Nice=10
-# The track record can't be rebuilt after the fact: keep a copy on the Pi too.
-Environment=LTI_TRACK_BACKUP=pi:lti-track/
+# The track record can't be rebuilt after the fact: keep a copy off this machine
+# once there is somewhere to put it.
+# Environment=LTI_TRACK_BACKUP=host:lti-track/
 # Optional overrides (see the script header):
 # Environment=LTI_TOP_N=40
-# Environment=LTI_PI_DEST=pi:HealthBoard/piStuff/website/invest/
+# Environment=LTI_PI_DEST=%h/HealthBoard/piStuff/website/invest/
 
 [Install]
 WantedBy=default.target

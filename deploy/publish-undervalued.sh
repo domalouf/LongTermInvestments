@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
 # Nightly: refresh the price cache and interest rates, add today to the forward track record,
-# regenerate the public "undervalued today" snapshot, and push the static files
-# to the Pi that serves domalouf.com.
+# regenerate the public "undervalued today" snapshot, and copy the static files
+# into the domalouf.com web root.
 #
-# Runs on the always-on server (the laptop), NOT the Pi — the Pi is 32-bit and
-# can't run the Python stack. See deploy/README.md for one-time setup.
+# Runs on the always-on server (`lts`), which also serves domalouf.com, so the
+# default target is a local path. See deploy/README.md for one-time setup.
 #
 # Config via environment (all optional):
 #   LTI_VENV         virtualenv dir                (default: <repo>/venv)
 #   LTI_STAGING      local dir for generated files (default: <repo>/build/invest)
-#   LTI_PI_DEST      rsync destination             (default: pi:HealthBoard/piStuff/website/invest/)
+#   LTI_PI_DEST      rsync destination             (default: ~/HealthBoard/piStuff/website/invest/)
 #   LTI_TOP_N        rows to publish               (default: 40)
 #   LTI_SKIP_PRICES  set to 1 to skip the price refresh
-#   LTI_TRACK_BACKUP rsync destination for a copy of data/track/ (e.g. "pi:lti-track/");
+#   LTI_TRACK_BACKUP rsync destination for a copy of data/track/ (e.g. "host:lti-track/");
 #                    unset, the record lives only on this machine
 #   LTI_UNDERVALUED_ARGS  extra flags for `lti undervalued` (e.g. "--min-profit-years 5")
 #
@@ -22,7 +22,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 venv="${LTI_VENV:-$repo/venv}"
 staging="${LTI_STAGING:-$repo/build/invest}"
-dest="${LTI_PI_DEST:-pi:HealthBoard/piStuff/website/invest/}"
+dest="${LTI_PI_DEST:-$HOME/HealthBoard/piStuff/website/invest/}"
 top_n="${LTI_TOP_N:-40}"
 
 log() { printf '==> %s  %s\n' "$(date -u +%FT%TZ)" "$*"; }

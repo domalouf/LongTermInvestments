@@ -6,8 +6,8 @@
 #   cloudflared tunnel route dns invest invest.domalouf.com
 #
 # Then copy this file to ~/.cloudflared/config.yml and fill in <TUNNEL-UUID>
-# and your home dir. This is a SEPARATE tunnel from the Pi's — the Pi keeps
-# serving domalouf.com, this one only serves invest.domalouf.com.
+# and your home dir. This is a SEPARATE tunnel from the HealthBoard stack's — that
+# one serves domalouf.com, this one only serves invest.domalouf.com.
 
 tunnel: <TUNNEL-UUID>
 credentials-file: /home/<USER>/.cloudflared/<TUNNEL-UUID>.json

@@ -4,12 +4,13 @@ How the investing tools reach the web.
 
 | Piece | Who sees it | Where it runs | How |
 | --- | --- | --- | --- |
-| **Undervalued today** — daily list | public | static files on the Pi (`domalouf.com/invest/`) | `publish-undervalued.sh` + `lti-undervalued.timer` |
-| **Full Streamlit GUI** (screener, backtest, …) | just you | the always-on server (laptop) | `lti-streamlit.service` + `cloudflared-invest.service` + Cloudflare Access |
+| **Undervalued today** — daily list | public | static files in the site's web root (`domalouf.com/invest/`) | `publish-undervalued.sh` + `lti-undervalued.timer` |
+| **Full Streamlit GUI** (screener, backtest, …) | just you | the always-on server (`lts`) | `lti-streamlit.service` + `cloudflared-invest.service` + Cloudflare Access |
 
-The Pi is 32-bit ARM and cannot run the Python stack (Streamlit hard-depends on
-`pyarrow`, no wheels), so all compute happens on the **server** (the laptop) and
-only static HTML/JSON/CSV is copied to the Pi.
+Everything runs on the **server** (`lts`), which also runs the HealthBoard stack that
+serves domalouf.com, so the snapshot is copied straight into the local web root.
+(domalouf.com used to be served from a 32-bit Raspberry Pi that couldn't run the
+Python stack; it moved to `lts` on 2026-09-27.)
 
 ---
 
@@ -30,18 +31,18 @@ only static HTML/JSON/CSV is copied to the Pi.
    to keep a copy off this machine — the record can't be rebuilt after the fact.
 4. `lti undervalued --out build/invest` — regenerates `index.html`,
    `undervalued.json`, `undervalued.csv`.
-5. `rsync` those to the Pi.
+5. `rsync` those into `~/HealthBoard/piStuff/website/invest/`.
 
-### One-time setup — on the Pi
+### One-time setup — the web root
 
 ```bash
-ssh pi 'mkdir -p ~/HealthBoard/piStuff/website/invest'
+mkdir -p ~/HealthBoard/piStuff/website/invest
 ```
 
-The snapshot isn't in git. To keep the Pi's checkout clean, add
+The snapshot isn't in git. To keep the HealthBoard checkout clean, add
 `piStuff/website/invest/` to HealthBoard's `.gitignore` next to the `blackjack/`,
 `zombies/` and `v2/` entries — commit and push it, then `git pull --ff-only` on the
-Pi. Don't append to `.gitignore` on the Pi itself: that dirties a tracked file, and
+server. Don't append to `.gitignore` on the server itself: that dirties a tracked file, and
 the next pull that changes `.gitignore` refuses to run.
 
 `piStuff/website/` is the nginx web root (bind-mounted to `/usr/share/nginx/html`
@@ -53,13 +54,13 @@ Then point the "Investments" card on the landing page at `/invest/`. The landing
 page lives in its own repo — `github.com/domalouf/MyWebsite` (`~/Projects/MyWebsite`),
 deployed with that repo's `deploy/deploy.sh`.
 
-### One-time setup — on the server (laptop)
+### One-time setup — the job
 
 ```bash
 cd ~/Projects/LongTermInvestments
 git pull && pip install -e .            # picks up refresh-prices + the renderer
 
-# smoke-test by hand first (writes to the Pi):
+# smoke-test by hand first (writes to the live web root):
 ./deploy/publish-undervalued.sh
 #   or dry-run locally:  LTI_PI_DEST="$PWD/build/_test/" ./deploy/publish-undervalued.sh
 
@@ -74,8 +75,8 @@ systemctl --user enable --now lti-undervalued.timer
 sudo loginctl enable-linger "$USER"
 ```
 
-Requires `ssh pi` to work non-interactively for the laptop's user (key in
-`~/.ssh/config`, same as the main PC — see the `pi-deployment` note).
+Run the job on one machine only: each copy keeps its own append-only track record,
+and two of them diverge.
 
 ### Check it
 
@@ -94,10 +95,10 @@ Set these as `Environment=` lines in `~/.config/systemd/user/lti-undervalued.ser
 | Var | Default | |
 | --- | --- | --- |
 | `LTI_TOP_N` | `40` | rows published |
-| `LTI_PI_DEST` | `pi:HealthBoard/piStuff/website/invest/` | rsync target |
+| `LTI_PI_DEST` | `~/HealthBoard/piStuff/website/invest/` | rsync target |
 | `LTI_UNDERVALUED_ARGS` | — | extra `lti undervalued` flags, e.g. `--min-models 4 --market-cap-min 2000` |
 | `LTI_SKIP_PRICES` | — | `1` to skip the price refresh |
-| `LTI_TRACK_BACKUP` | `pi:lti-track/` in the shipped unit | where to copy `data/track/` after each record; unset, it stays on this machine only |
+| `LTI_TRACK_BACKUP` | unset (commented out in the shipped unit) | where to copy `data/track/` after each record; unset, it stays on this machine only |
 
 Schedule lives in the `.timer` (`OnCalendar=*-*-* 07:30:00 UTC`, `Persistent=true`
 so a missed night runs at next boot).
@@ -129,8 +130,8 @@ browser ──TLS──▶ Cloudflare edge ──▶ Access policy (your email o
                         streamlit  127.0.0.1:8501  (laptop)
 ```
 
-This is a **separate** Cloudflare tunnel from the Pi's — the Pi keeps serving
-`domalouf.com`, and the public `/invest/` snapshot above is independent, so the
+This is a **separate** Cloudflare tunnel from the HealthBoard stack's — that one
+serves `domalouf.com`, and the public `/invest/` snapshot above is independent, so the
 GUI can be down without affecting it.
 
 ### One-time — Cloudflare dashboard
