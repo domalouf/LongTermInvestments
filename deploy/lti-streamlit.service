@@ -1,5 +1,5 @@
 [Unit]
-Description=LongTermInvestments Streamlit GUI (private — Cloudflare Access only)
+Description=LongTermInvestments Streamlit GUI (private — invest.domalouf.com, admin only)
 Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
 After=network-online.target
 Wants=network-online.target
@@ -13,7 +13,7 @@ Restart=on-failure
 RestartSec=5
 # Everything (app + data) lives under $HOME; no elevated access needed.
 # Server binds 127.0.0.1:8501 via .streamlit/config.toml — reachable only
-# through the cloudflared tunnel.
+# through the site's nginx, which lets in no one but the domalouf.com admin.
 
 [Install]
 WantedBy=default.target

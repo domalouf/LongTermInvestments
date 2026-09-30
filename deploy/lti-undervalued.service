@@ -16,7 +16,7 @@ Nice=10
 # Environment=LTI_TRACK_BACKUP=host:lti-track/
 # Optional overrides (see the script header):
 # Environment=LTI_TOP_N=40
-# Environment=LTI_DEST=%h/HealthBoard/piStuff/website/invest/
+# Environment=LTI_DEST=%h/site/www/invest/
 
 [Install]
 WantedBy=default.target

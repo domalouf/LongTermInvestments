@@ -5,10 +5,11 @@ How the investing tools reach the web.
 | Piece | Who sees it | Where it runs | How |
 | --- | --- | --- | --- |
 | **Undervalued today** — daily list | public | static files in the site's web root (`domalouf.com/invest/`) | `publish-undervalued.sh` + `lti-undervalued.timer` |
-| **Full Streamlit GUI** (screener, backtest, …) | just you | the always-on server (`lts`) | `lti-streamlit.service` + `cloudflared-invest.service` + Cloudflare Access |
+| **Full Streamlit GUI** (screener, backtest, …) | just you | the always-on server (`lts`) | `lti-streamlit.service`, behind the site's admin sign-in |
 
-Everything runs on the **server** (`lts`), which also runs the HealthBoard stack that
-serves domalouf.com, so the snapshot is copied straight into the local web root.
+Everything runs on the **server** (`lts`), which also serves domalouf.com (the site's
+own stack, from the [MyWebsite](https://github.com/domalouf/MyWebsite) repo), so the
+snapshot is copied straight into the local web root.
 
 ---
 
@@ -29,24 +30,17 @@ serves domalouf.com, so the snapshot is copied straight into the local web root.
    to keep a copy off this machine — the record can't be rebuilt after the fact.
 4. `lti undervalued --out build/invest` — regenerates `index.html`,
    `undervalued.json`, `undervalued.csv`.
-5. `rsync` those into `~/HealthBoard/piStuff/website/invest/`.
+5. `rsync` those into `~/site/www/invest/`, the site's web root.
 
 ### One-time setup — the web root
 
 ```bash
-mkdir -p ~/HealthBoard/piStuff/website/invest
+mkdir -p ~/site/www/invest
 ```
 
-The snapshot isn't in git. To keep the HealthBoard checkout clean, add
-`piStuff/website/invest/` to HealthBoard's `.gitignore` next to the `blackjack/`,
-`zombies/` and `v2/` entries — commit and push it, then `git pull --ff-only` on the
-server. Don't append to `.gitignore` on the server itself: that dirties a tracked file, and
-the next pull that changes `.gitignore` refuses to run.
-
-`piStuff/website/` is the nginx web root (bind-mounted to `/usr/share/nginx/html`
-by `piStuff/docker-compose.yml`), so `https://domalouf.com/invest/` serves
-`~/HealthBoard/piStuff/website/invest/index.html` with no nginx change. Add a
-`location /invest/` block only if you want custom cache headers.
+`~/site/www/` is the site's web root (nginx serves it; see MyWebsite's README), a
+plain directory rather than a git checkout, so `https://domalouf.com/invest/` serves
+`~/site/www/invest/index.html` with no nginx change.
 
 Then point the "Investments" card on the landing page at `/invest/`. The landing
 page lives in its own repo — `github.com/domalouf/MyWebsite` (`~/Projects/MyWebsite`),
@@ -93,7 +87,7 @@ Set these as `Environment=` lines in `~/.config/systemd/user/lti-undervalued.ser
 | Var | Default | |
 | --- | --- | --- |
 | `LTI_TOP_N` | `40` | rows published |
-| `LTI_DEST` | `~/HealthBoard/piStuff/website/invest/` | rsync target |
+| `LTI_DEST` | `~/site/www/invest/` | rsync target |
 | `LTI_UNDERVALUED_ARGS` | — | extra `lti undervalued` flags, e.g. `--min-models 4 --market-cap-min 2000` |
 | `LTI_SKIP_PRICES` | — | `1` to skip the price refresh |
 | `LTI_TRACK_BACKUP` | unset (commented out in the shipped unit) | where to copy `data/track/` after each record; unset, it stays on this machine only |
@@ -114,64 +108,51 @@ lti update && lti build-fundamentals && lti refresh-tickers && lti fetch-prices
 ## Private Streamlit GUI
 
 The full GUI (screener, backtest, factor analysis, stock detail, undervalued) at
-`https://invest.domalouf.com`, reachable from anywhere but gated to your email by
-Cloudflare Access. The app itself has **no login** — Cloudflare does the auth, so
-unauthenticated traffic never reaches Streamlit.
+`https://invest.domalouf.com`, reachable from anywhere but only by the site's admin.
+The app itself has **no login** — the site does the auth, so nobody else's traffic
+ever reaches Streamlit.
 
 ```
-browser ──TLS──▶ Cloudflare edge ──▶ Access policy (your email only)
+browser ──TLS──▶ Cloudflare edge ──▶ the domalouf.com tunnel (lts)
                                        │
                                        ▼
-                             cloudflared tunnel (laptop)
-                                       │
-                                       ▼
-                        streamlit  127.0.0.1:8501  (laptop)
+                         the site's nginx: signed in as admin?
+                          │ no: to domalouf.com/admin/ to sign in, then back
+                          ▼ yes
+                        streamlit  127.0.0.1:8501  (lts)
 ```
 
-This is a **separate** Cloudflare tunnel from the HealthBoard stack's — that one
-serves `domalouf.com`, and the public `/invest/` snapshot above is independent, so the
-GUI can be down without affecting it.
+Signed in on domalouf.com is signed in here (the site's admin cookies cover every
+subdomain), and the site-wide admin bar shows on the GUI's pages too. The
+`invest.domalouf.com` server block, the tunnel's public hostname and the sign-in are
+all the site's (MyWebsite: `server/nginx/site.conf`). This repo only runs Streamlit
+on loopback.
 
-### One-time — Cloudflare dashboard
-
-1. **DNS / tunnel** is created by the CLI below (`cloudflared tunnel route dns`).
-2. **Access application** — [one-time-PIN, no IdP needed]:
-   Zero Trust dashboard → Access → Applications → *Add* → *Self-hosted*
-   - Application domain: `invest.domalouf.com`
-   - Session duration: e.g. 24h
-   - Policy: *Allow*, Include → *Emails* → `malouf.dominic@gmail.com`
-   - Leave the login method as the default one-time PIN (email code).
-
-### One-time — laptop server
+### One-time — the server
 
 ```bash
-# 1. cloudflared  (Arch: `sudo pacman -S cloudflared`, or the official binary)
-cloudflared tunnel login                       # pick the domalouf.com zone
-cloudflared tunnel create invest               # note the UUID it prints
-cloudflared tunnel route dns invest invest.domalouf.com
-
-cp deploy/cloudflared-invest.yml ~/.cloudflared/config.yml
-#   edit: set <TUNNEL-UUID> and <USER> (twice)
-
-# 2. systemd user services
-cp deploy/lti-streamlit.service deploy/cloudflared-invest.service ~/.config/systemd/user/
+cp deploy/lti-streamlit.service ~/.config/systemd/user/
 #   edit ExecStart/WorkingDirectory paths if the repo isn't at ~/Projects/LongTermInvestments
 systemctl --user daemon-reload
 systemctl --user enable --now lti-streamlit.service
-systemctl --user enable --now cloudflared-invest.service
 sudo loginctl enable-linger "$USER"             # (already done if the timer is installed)
 ```
 
 The Streamlit server config lives in the repo at `.streamlit/config.toml`
 (loopback bind, headless, dark theme) — it applies to local `streamlit run` too.
 
+Before this, the GUI had a tunnel of its own and Cloudflare Access in front. If
+those are still set up, the move is in MyWebsite's README ("Moving the site out of
+HealthBoard"): the DNS record and Access application go, and
+`systemctl --user disable --now cloudflared-invest && cloudflared tunnel delete invest`.
+
 ### Check it
 
 ```bash
-systemctl --user status lti-streamlit.service cloudflared-invest.service
+systemctl --user status lti-streamlit.service
 curl -sf http://127.0.0.1:8501/_stcore/health && echo " streamlit ok"
-cloudflared tunnel info invest
-# from a browser: https://invest.domalouf.com  -> Cloudflare email-code prompt -> app
+curl -sI https://invest.domalouf.com/ | grep -i -e '^HTTP' -e '^location'   # signed out: 302 to sign in
+# from a browser, signed in at domalouf.com/admin/: https://invest.domalouf.com -> the app
 ```
 
 ### Data on the server

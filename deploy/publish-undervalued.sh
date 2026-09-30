@@ -10,7 +10,7 @@
 # Config via environment (all optional):
 #   LTI_VENV         virtualenv dir                (default: <repo>/venv)
 #   LTI_STAGING      local dir for generated files (default: <repo>/build/invest)
-#   LTI_DEST      rsync destination             (default: ~/HealthBoard/piStuff/website/invest/)
+#   LTI_DEST      rsync destination             (default: ~/site/www/invest/)
 #   LTI_TOP_N        rows to publish               (default: 40)
 #   LTI_SKIP_PRICES  set to 1 to skip the price refresh
 #   LTI_TRACK_BACKUP rsync destination for a copy of data/track/ (e.g. "host:lti-track/");
@@ -22,7 +22,7 @@ set -euo pipefail
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 venv="${LTI_VENV:-$repo/venv}"
 staging="${LTI_STAGING:-$repo/build/invest}"
-dest="${LTI_DEST:-$HOME/HealthBoard/piStuff/website/invest/}"
+dest="${LTI_DEST:-$HOME/site/www/invest/}"
 top_n="${LTI_TOP_N:-40}"
 
 log() { printf '==> %s  %s\n' "$(date -u +%FT%TZ)" "$*"; }
