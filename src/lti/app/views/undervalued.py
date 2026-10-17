@@ -299,7 +299,7 @@ theme.note(
 
 with st.expander(f"What each of the {len(MODELS)} equations does — and what it assumes"):
     st.caption(
-        "Every fair value on this page is the median of these six. They are not six independent "
+        "Every fair value on this page is the mean of these six. They are not six independent "
         "opinions: Lynch, both Grahams and earnings power all multiply the same normalized EPS, so "
         "they mostly restate it at different multiples. The DCF runs on cash flow and the dividend "
         "discount on cash actually paid out — those two are the ones that can disagree for a reason."
@@ -428,7 +428,7 @@ filed by the as-of date: normalized EPS is the median of those years' EPS, norma
 cash flow the median of theirs, and growth the revenue trend across them. A median, so one
 year — a cyclical peak, a tax-asset release, a merger gain — can't move it.
 
-**Fair value.** The median of the {len(MODELS)} models that produced a number: two-stage
+**Fair value.** The mean of the {len(MODELS)} models that produced a number: two-stage
 DCF (on normalized free cash flow), Peter Lynch, Graham number, Graham revised and earnings
 power (on normalized EPS), and dividend discount (on the current dividend). Upside is fair
 value ÷ price − 1; gaps above +500% are dropped as data errors.

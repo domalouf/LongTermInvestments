@@ -26,8 +26,9 @@ published HTML to render, and :func:`explain` prints one company's own numbers
 in place of the symbols.
 
 :func:`add_valuation_models` runs all six and blends them into
-``fair_value_est``, the *median* of those that produced a number — a median so
-that one model's extreme can't set the answer. Note that four of the six
+``fair_value_est``, the *mean* of those that produced a number — every model
+that answered counts equally, so one model's extreme pulls the answer further
+than it would a median. Note that four of the six
 multiply the same EPS, so six values agreeing is not six independent opinions;
 the DCF (cash flow) and the DDM (dividends actually paid) are the two carrying
 separate evidence.
@@ -590,12 +591,13 @@ def explain_inputs(
 
 def explain_blend(row: pd.Series) -> str:
     """How the models' values became ``fair_value_est`` and its upside, in one
-    line: the median of the values that came out, then ÷ price − 1."""
+    line: the mean of the values that came out, then ÷ price − 1."""
     vals = sorted(float(row[m]) for m in MODELS if m in row.index and pd.notna(row[m]))
     if not vals:
         return "no model produced a value"
     fv, price = row.get("fair_value_est"), row.get("price")
-    line = f"median of {len(vals)} values ({', '.join(_money(v) for v in vals)}) = {_money(fv)}"
+    line = (f"mean of {len(vals)} values: ({' + '.join(_money(v) for v in vals)}) ÷ {len(vals)}"
+            f" = {_money(fv)}")
     if pd.notna(fv) and price is not None and pd.notna(price) and price > 0:
         line += f"; upside = {_money(fv)} ÷ {_money(price)} − 1 = {float(fv) / float(price) - 1:+.0%}"
     return line
@@ -613,14 +615,16 @@ def add_valuation_models(
     basis: str = "normalized",
 ) -> pd.DataFrame:
     """Add every model's fair value + ``*_upside``, a blended ``fair_value_est``
-    (median of the models that produced a number) and ``fair_value_est_upside``.
+    (mean of the models that produced a number) and ``fair_value_est_upside``.
 
     ``price`` is indexed like ``df`` (by cik). ``basis`` picks the earnings the
     models run on (see the module docstring); ``normalized`` needs the
     :func:`lti.history.add_history` columns.
 
-    The blend is a median rather than a mean so that one model's extreme can't
-    set the answer — but the models are not six independent opinions: four of
+    The blend is a mean, so every model that produced a number counts equally
+    — and one model's extreme moves it more than it would a median; the
+    :data:`MAX_UPSIDE` cut is what keeps a runaway value off the ranked list.
+    Nor are the models six independent opinions: four of
     them (Lynch, both Grahams, EPV) multiply the same EPS, so their agreement
     mostly restates that one number. The DCF runs on cash flow and the DDM on
     dividends actually paid; those two are the ones carrying separate evidence.
@@ -702,7 +706,7 @@ def add_valuation_models(
         df["ddm_value"] = ddm_value(dps, d_growth, a)
 
     present = [m for m in MODELS if m in df.columns]
-    df["fair_value_est"] = df[present].replace([np.inf, -np.inf], np.nan).median(axis=1)
+    df["fair_value_est"] = df[present].replace([np.inf, -np.inf], np.nan).mean(axis=1)
     df["n_models"] = df[present].replace([np.inf, -np.inf], np.nan).notna().sum(axis=1)
 
     for m in [*present, "fair_value_est"]:

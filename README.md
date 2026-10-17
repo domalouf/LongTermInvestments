@@ -706,7 +706,7 @@ look is a `review` entry pointing at the original, and the page flags reviews th
 
 ### Intrinsic-value models (`lti.valuation`)
 `add_valuation_models()` turns a fundamentals snapshot + price into a fair value per share
-from six equations, and blends them into `fair_value_est` — the **median** of the ones that
+from six equations, and blends them into `fair_value_est` — the **mean** of the ones that
 produced a number. `*_upside` is `fair value ÷ price − 1`.
 
 Same explanations everywhere: each equation is walked through in its function's docstring,
@@ -812,11 +812,12 @@ trailing dividend and 4.3% growth, trading at $30 — the arithmetic the Stock p
 | Dividend discount | dividend $0.64 × (1 + 2.5%) / (9.0% − 2.5%) | **$10.09** |
 | Earnings power | EPS $3.05 / 9.0% | **$33.89** |
 
-`fair_value_est` is the median, $31.53, a +5% gap to the $30 price. A median rather than a mean
-so that one model's extreme — the $10.09 here — can't set the answer.
+`fair_value_est` is the mean, $181.69 ÷ 6 = $30.28, a +1% gap to the $30 price. Every model
+that produced a number counts equally, so one model's extreme — the $10.09 or the $51.00 here —
+moves the answer more than it would a median (which would be $31.53).
 
 Six values from $10 to $51 for the same company is the point, not a defect: the spread *is* the
-uncertainty, and a tight cluster deserves more weight than a high median. But six models agreeing
+uncertainty, and a tight cluster deserves more weight than a high average. But six models agreeing
 is not six independent opinions — four of them (Lynch, both Grahams, earnings power) multiply the
 same EPS, so they mostly restate that one number at different multiples. The DCF (cash flow) and
 the dividend discount (cash actually paid out) are the two carrying separate evidence.

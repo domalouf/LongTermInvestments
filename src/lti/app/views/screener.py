@@ -234,7 +234,7 @@ else:
     # Styler says, and a model that produced no value is common enough to matter here
     st.table(fv_table.set_index("ticker").style.format(fmt, na_rep="—"))
     st.caption(
-        "`*_upside` = model fair value ÷ price − 1. Blended `fair_value_est` is the median of the "
+        "`*_upside` = model fair value ÷ price − 1. Blended `fair_value_est` is the mean of the "
         "models that produced a number. The models run on normalized earnings — `eps_norm`, the "
         "median of the last five years' EPS — with growth from the five-year revenue trend, "
         "clipped to [0, max]; `profit_years` is how many of those years were profitable."
