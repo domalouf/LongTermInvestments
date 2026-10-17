@@ -43,30 +43,27 @@ def run_pipeline_only() -> None:
     execute_processes(processes)
 
 
-def index_dataframe() -> pd.DataFrame:
-    """All indexed filings: columns ``adsh, cik, name, form, filed, period, ...``."""
+def _accessor():
     from secfsdstools.c_index.indexdataaccess import ParquetDBIndexingAccessor
 
-    accessor = ParquetDBIndexingAccessor(db_dir=str(_cfg().db_dir))
-    return accessor.read_all_indexreports_df()
+    return ParquetDBIndexingAccessor(db_dir=str(_cfg().db_dir))
+
+
+def index_dataframe() -> pd.DataFrame:
+    """All indexed filings: columns ``adsh, cik, name, form, filed, period, ...``."""
+    return _accessor().read_all_indexreports_df()
 
 
 def latest_quarter() -> str | None:
     """Name of the most recent processed quarter zip, e.g. ``2025q2.zip``."""
-    from secfsdstools.c_index.indexdataaccess import ParquetDBIndexingAccessor
-
-    accessor = ParquetDBIndexingAccessor(db_dir=str(_cfg().db_dir))
-    return accessor.find_latest_quarter_file_name()
+    return _accessor().find_latest_quarter_file_name()
 
 
 def all_quarter_zip_names() -> list[str]:
     """Every available quarter zip name, excluding the empty ``2009q1.zip``."""
-    from secfsdstools.c_index.indexdataaccess import ParquetDBIndexingAccessor
-
-    accessor = ParquetDBIndexingAccessor(db_dir=str(_cfg().db_dir))
     return [
         x.fileName
-        for x in accessor.read_all_indexfileprocessing()
+        for x in _accessor().read_all_indexfileprocessing()
         if x.fullPath
         and not x.fullPath.endswith("2009q1.zip")
         and x.fileName.endswith(".zip")

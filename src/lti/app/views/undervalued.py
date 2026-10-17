@@ -10,19 +10,21 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import lti.config as config
-from lti import prices as prices_mod, stock as stock_mod
-from lti.app import theme
+from lti import prices as prices_mod, rates as rates_mod, stock as stock_mod
+from lti.app import theme, widgets
 from lti.history import HISTORY_YEARS
-from lti.valuation import MIN_MODELS, MODELS, ValuationAssumptions, rank_undervalued
+from lti.valuation import (
+    MIN_MODELS,
+    MODEL_DOCS,
+    MODELS,
+    ValuationAssumptions,
+    explain,
+    explain_blend,
+    explain_inputs,
+    rank_undervalued,
+)
 
-MODEL_LABELS = {
-    "dcf_value": "Two-stage DCF",
-    "lynch_fair_value": "Peter Lynch",
-    "graham_number": "Graham number",
-    "graham_intrinsic": "Graham revised",
-    "ddm_value": "Dividend discount",
-    "epv_value": "Earnings power",
-}
+TOP_N = 20  # the list shows this many; the rest only count toward "names found"
 
 theme.header(
     "🎯 Undervalued today",
@@ -38,22 +40,15 @@ theme.header(
 )
 
 
-@st.cache_data(show_spinner=False)
-def _load_fund() -> pd.DataFrame:
-    from lti.fundamentals import load_fundamentals
-
-    return load_fundamentals()
-
-
 @st.cache_data(show_spinner="Valuing the universe…")
 def _rank(key: str) -> pd.DataFrame:
     p = json.loads(key)
     return rank_undervalued(
-        _load_fund(),
+        widgets.fundamentals(),
         prices_mod.load_price_data(),
         p["asof"],
         assumptions=ValuationAssumptions(
-            discount_rate=p["discount_rate"],
+            **p["rates"],
             terminal_growth=p["terminal_growth"],
             growth_cap=p["growth_cap"],
         ),
@@ -63,15 +58,11 @@ def _rank(key: str) -> pd.DataFrame:
         min_profit_years=p["min_profit_years"],
         min_roe=p["min_roe"],
         exclude_financials=p["exclude_financials"],
-        top_n=None,  # slice in the page so the sliders below don't re-run this
+        top_n=None,  # slice in the page: "names found" counts them all
     )
 
 
-try:
-    _load_fund()
-except FileNotFoundError:
-    st.error("No fundamentals table. Run `lti build-fundamentals` first.")
-    st.stop()
+fund = widgets.fundamentals()
 if not config.get_paths().close_parquet.exists():
     st.error("No split-adjusted price cache. Run `lti fetch-prices` first.")
     st.stop()
@@ -103,10 +94,9 @@ with st.sidebar:
         help="Positive EPS in the latest year as well as on the normalized basis. Off, the list "
              "admits companies valued on better years they may not get back.",
     )
-    top_n = st.slider("Show top N", 10, 100, 40)
 
     with st.expander("Valuation assumptions"):
-        disc = st.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+        rate_kw = widgets.rates(asof)
         term = st.slider("Terminal growth", 0.0, 0.04, 0.025, 0.005, format="%.3f")
         gcap = st.slider("Max growth", 0.05, 0.30, 0.15, 0.01, format="%.2f")
         min_models = st.slider(
@@ -125,7 +115,7 @@ ranked_all = _rank(
             "require_positive_eps": require_pos_eps,
             "exclude_financials": excl_fin,
             "min_roe": (min_roe_pct / 100) if min_roe_pct else None,
-            "discount_rate": disc,
+            "rates": rate_kw,
             "terminal_growth": term,
             "growth_cap": gcap,
         }
@@ -136,7 +126,7 @@ if ranked_all.empty:
     st.warning("No names pass these filters. Loosen the market-cap floor or the consistency requirements.")
     st.stop()
 
-ranked = ranked_all.head(top_n).copy()
+ranked = ranked_all.head(TOP_N).copy()
 
 # --- headline ---------------------------------------------------------------
 
@@ -307,6 +297,15 @@ theme.note(
     "cluster mostly restates that one number — the history chart is the better evidence."
 )
 
+with st.expander(f"What each of the {len(MODELS)} equations does — and what it assumes"):
+    st.caption(
+        "Every fair value on this page is the mean of these six. They are not six independent "
+        "opinions: Lynch, both Grahams and earnings power all multiply the same normalized EPS, so "
+        "they mostly restate it at different multiples. The DCF runs on cash flow and the dividend "
+        "discount on cash actually paid out — those two are the ones that can disagree for a reason."
+    )
+    widgets.model_notes()
+
 pick = st.selectbox(
     "Company",
     ranked["ticker"].tolist(),
@@ -317,10 +316,12 @@ row = ranked[ranked["ticker"] == pick].iloc[0]
 cik = int(ranked.index[ranked["ticker"] == pick][0])
 price = float(row["price"])
 
+page_assumptions = ValuationAssumptions(**rate_kw, terminal_growth=term, growth_cap=gcap)
+
 left, right = st.columns(2)
 with left:
     st.subheader("Model values")
-    vals = [(MODEL_LABELS.get(m, m), float(row[m])) for m in MODELS if m in row.index and pd.notna(row[m])]
+    vals = [(MODEL_DOCS[m].label, float(row[m])) for m in MODELS if m in row.index and pd.notna(row[m])]
     vals.sort(key=lambda t: t[1])
     if not vals:
         st.info("No model produced a fair value for this company.")
@@ -337,8 +338,7 @@ with left:
                 hovertemplate="%{y}<br>fair value $%{x:,.2f}<extra></extra>",
             )
         )
-        fig3.update_traces(marker_line_width=0, marker_cornerradius=4)
-        fig3.update_layout(bargap=0.42)
+        theme.bar_marks(fig3, color=None, gap=0.42)
         fig3.add_vline(x=price, line_width=1.5, line_color=theme.INK_2)
         fig3.add_annotation(
             x=price, y=1.0, yref="paper", yanchor="bottom", xanchor="left",
@@ -351,10 +351,19 @@ with left:
                        range=[0, max(max(amounts), price) * 1.22]),
             yaxis_title="",
         )
+        # the arithmetic behind each bar, at the sidebar's assumptions
+        theme.note(
+            "<br>".join(
+                f"<b>{MODEL_DOCS[m].label}</b> &nbsp;{explain(m, row, page_assumptions)}"
+                for m in MODELS
+                if m in row.index and pd.notna(row[m])
+            )
+            + f"<br><b>Fair value</b> &nbsp;{explain_blend(row)}"
+        )
 
 with right:
     st.subheader("Earnings history")
-    annual = stock_mod.annual_fundamentals(_load_fund(), cik)
+    annual = stock_mod.annual_fundamentals(fund, cik)
     annual = annual[annual["filed"] <= pd.Timestamp(asof)].tail(10)
     if annual.empty or "eps" not in annual.columns or not annual["eps"].notna().any():
         st.info("No EPS history on file.")
@@ -369,8 +378,7 @@ with right:
                 hovertemplate="FY%{x}<br>EPS $%{y:,.2f} (today's share basis)<extra></extra>",
             )
         )
-        fig4.update_traces(marker_line_width=0, marker_cornerradius=3)
-        fig4.update_layout(bargap=0.3)
+        theme.bar_marks(fig4, color=None, radius=3, gap=0.3)
         theme.zero_line(fig4, axis="y")
         if pd.notna(row.get("eps_norm")):
             fig4.add_hline(y=float(row["eps_norm"]), line_width=1.5, line_color=theme.ORANGE)
@@ -385,6 +393,17 @@ with right:
             f"Blue: the {HISTORY_YEARS} years in the norm (grey ones are older). EPS restated onto "
             "today's share count, as filed at the time."
         )
+
+st.subheader("The variables")
+treasury = rates_mod.rates_asof(rates_mod.load_rates(), asof)["treasury_10y"]
+st.dataframe(
+    pd.DataFrame(
+        explain_inputs(row, page_assumptions, treasury_10y=float(treasury) if pd.notna(treasury) else None),
+        columns=["Symbol", "Variable", "Value", "Where it comes from"],
+    ),
+    hide_index=True,
+    width="stretch",
+)
 
 d = st.columns(5)
 d[0].metric("Price", f"${price:,.2f}")
@@ -409,7 +428,7 @@ filed by the as-of date: normalized EPS is the median of those years' EPS, norma
 cash flow the median of theirs, and growth the revenue trend across them. A median, so one
 year — a cyclical peak, a tax-asset release, a merger gain — can't move it.
 
-**Fair value.** The median of the {len(MODELS)} models that produced a number: two-stage
+**Fair value.** The mean of the {len(MODELS)} models that produced a number: two-stage
 DCF (on normalized free cash flow), Peter Lynch, Graham number, Graham revised and earnings
 power (on normalized EPS), and dividend discount (on the current dividend). Upside is fair
 value ÷ price − 1; gaps above +500% are dropped as data errors.

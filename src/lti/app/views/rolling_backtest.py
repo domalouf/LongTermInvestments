@@ -7,8 +7,7 @@ import json
 import plotly.graph_objects as go
 import streamlit as st
 
-from lti.app import theme
-from lti.metrics import FUNDAMENTAL_METRICS, HISTORY_METRICS, PRICE_METRICS, VALUATION_METRICS
+from lti.app import theme, widgets
 from lti.ranking import ScreenSpec
 from lti.rolling import RollingConfig, run_rolling_backtest
 
@@ -33,6 +32,10 @@ def _run(cfg_key: str):
         end=raw["end"] or None,
         rebalance_month=raw["rebalance_month"],
         market_cap_min=raw["market_cap_min"],
+        sell_rank=raw.get("sell_rank"),
+        industry_cap=raw.get("industry_cap"),
+        quarterly=raw.get("quarterly", True),
+        **widgets.friction_kwargs(raw["frictions"]),
     )
     result = run_rolling_backtest(cfg)
     return result.windows, result.summary, result.warnings
@@ -40,16 +43,16 @@ def _run(cfg_key: str):
 
 with st.sidebar:
     st.header("Strategy")
-    all_metrics = FUNDAMENTAL_METRICS + PRICE_METRICS + HISTORY_METRICS + VALUATION_METRICS
-    chosen = st.multiselect("Rank by", all_metrics, default=["pe", "debt_to_equity"])
-    coverage = 100
-    if len(chosen) > 2:
-        coverage = st.slider(
-            "Rank companies with at least … % of the metrics", 50, 100, 100, step=10,
-            help="100% needs every metric, which shrinks the universe as the list grows. Lower, "
-                 "a company ranks on the average of the metrics it has.",
-        )
+    chosen, coverage = widgets.rank_by(["pe", "debt_to_equity"])
     top_n = st.slider("Top N", 5, 50, 10)
+    sell_rank = widgets.sell_rank(top_n)
+    industry_cap = widgets.industry_cap()
+    use_quarterly = st.checkbox(
+        "Use 10-Q filings", value=True,
+        help="Rank each company on its latest quarter — trailing twelve months from its 10-Qs — rather "
+             "than waiting up to a year for the next 10-K. Off ranks on 10-Ks alone, as before. Needs "
+             "`lti build-quarterly` (or a fresh `lti build-fundamentals`).",
+    )
     windows = st.multiselect("Window lengths (years)", [1, 2, 3, 5, 7, 10], default=[3, 5])
     step_months = st.slider("Step between window starts (months)", 1, 24, 12)
     start = st.text_input("Earliest start (blank = all the price history)", "")
@@ -59,6 +62,7 @@ with st.sidebar:
         help="April by default, as on the Backtest page: by then calendar-year 10-Ks are in.",
     )
     cap_floor_m = st.number_input("Min market cap ($M)", value=500.0, step=100.0, min_value=0.0)
+    fric = widgets.frictions()
     go_btn = st.button("Run rolling backtest", type="primary")
 
 if not chosen:
@@ -72,22 +76,21 @@ cfg_key = json.dumps(
     {
         "metrics": chosen,
         "top_n": top_n,
-        "min_coverage": coverage / 100,
+        "min_coverage": coverage,
         "window_years": sorted(windows),
         "step_months": step_months,
         "start": start.strip(),
         "end": end.strip(),
         "rebalance_month": rebal_month,
         "market_cap_min": cap_floor_m * 1e6,
+        "sell_rank": sell_rank,
+        "industry_cap": industry_cap,
+        "quarterly": use_quarterly,
+        "frictions": fric,
     }
 )
 
-# as on the Backtest page: remember what was run, so the page survives a rerun
-if go_btn:
-    st.session_state["rolling_key"] = cfg_key
-if st.session_state.get("rolling_key") != cfg_key:
-    st.info("Set the strategy in the sidebar and hit **Run rolling backtest**.")
-    st.stop()
+widgets.run_gate("rolling", go_btn, cfg_key, "Set the strategy in the sidebar and hit **Run rolling backtest**.")
 
 try:
     windows_df, summary, warnings = _run(cfg_key)
@@ -96,6 +99,12 @@ except RuntimeError as exc:
     st.stop()
 
 st.header("By window length")
+if fric["cost_bps"] > 0 or fric["tax"] is not None:
+    theme.note(
+        f"Every window after {fric['cost_bps']:g} bps a trade{' and taxes' if fric['tax'] else ''} — the "
+        "strategy, its universe and SPY alike. Each window's CAGR before them is in "
+        "<i>Every window</i>, as <code>port_cagr_gross</code>."
+    )
 st.dataframe(
     summary, hide_index=True, width="stretch",
     column_config={
@@ -144,7 +153,4 @@ with st.expander(f"Every window ({len(windows_df)})"):
         "Download windows CSV", windows_df.to_csv(index=False).encode(), "rolling_windows.csv", "text/csv"
     )
 
-if warnings:
-    with st.expander(f"Warnings ({len(warnings)})"):
-        for w in warnings:
-            st.text(w)
+widgets.warnings_expander(warnings)

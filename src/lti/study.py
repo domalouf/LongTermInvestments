@@ -20,6 +20,12 @@ code, before any result:
 
 ``profit_years`` isn't among the hypotheses: step 2 of this project already
 looked at it across the whole sample, so it can't be tested out of sample here.
+
+Three things the rest of the project changed after registration are held at
+what they were, so the published results stay reproducible: the fundamentals
+are 10-Ks only, not the fresher 10-Q rows; free cash flow is measured before
+stock-based pay was netted out of it (both :func:`as_registered`); and the
+backtests are gross of trading costs.
 """
 
 from __future__ import annotations
@@ -94,6 +100,19 @@ def _signed(summary: pd.DataFrame, metric: str, sign: int, col: str) -> float:
     return float(summary.at[metric, col]) * sign
 
 
+def as_registered(fund: pd.DataFrame) -> pd.DataFrame:
+    """``fund`` as the study was registered on: 10-Ks only (no trailing-twelve-month
+    10-Q rows, :mod:`lti.quarterly`), and free cash flow as operating cash flow
+    less capex, with stock-based pay still in it (see
+    :func:`lti.fundamentals.add_free_cash_flow`)."""
+    from lti import pit
+
+    fund = pit.annual(fund)
+    if "free_cash_flow_reported" not in fund.columns:
+        return fund
+    return fund.assign(free_cash_flow=fund["free_cash_flow_reported"])
+
+
 def verdict(t_signed: float) -> str:
     if np.isnan(t_signed):
         return "no data"
@@ -120,6 +139,7 @@ def run_study(
         fund = load_fundamentals()
     if px is None:
         px = prices_mod.load_price_data()
+    fund = as_registered(fund)
 
     base = ICConfig(
         metrics=[h.metric for h in FACTORS],
@@ -169,10 +189,14 @@ def run_study(
     spec = ScreenSpec(metrics=screen_parts, top_n=top_n, filters={"exclude_financials": True}, min_coverage=0.5)
     backtests = {}
     for label, (start, end) in {"first half": ("2011-04-01", "2018-04-30"), "second half": ("2019-04-01", None)}.items():
-        r = run_backtest(BacktestConfig(screen=spec, start=start, end=end, market_cap_min=backtest_cap_min), fund, px)
+        r = run_backtest(
+            BacktestConfig(screen=spec, start=start, end=end, market_cap_min=backtest_cap_min, cost_bps=0.0), fund, px
+        )
         backtests[label] = r.stats
     spread = (
-        rebalance_month_spread(BacktestConfig(screen=spec, start=SECOND_HALF[0], market_cap_min=backtest_cap_min), fund, px)
+        rebalance_month_spread(
+            BacktestConfig(screen=spec, start=SECOND_HALF[0], market_cap_min=backtest_cap_min, cost_bps=0.0), fund, px
+        )
         if month_spread
         else pd.DataFrame()
     )

@@ -63,6 +63,7 @@ class Paths:
     # our derived artifacts
     derived_dir: Path
     fundamentals_parquet: Path
+    quarterly_parquet: Path  # trailing-twelve-month rows from 10-Qs (lti.quarterly)
     cik_ticker_parquet: Path
     sic_parquet: Path
     raw_bs_tags_parquet: Path
@@ -76,11 +77,14 @@ class Paths:
     splits_parquet: Path
     dividends_parquet: Path
     prices_meta_parquet: Path
+    rates_parquet: Path  # the 10-year Treasury and AAA corporate yields (lti.rates)
+    factors_parquet: Path  # Fama-French factor returns, monthly (lti.attribution)
 
-    # forward track record + decision journal (append-only)
+    # forward track record, decision journal and your own portfolio (append-only)
     track_dir: Path
     track_records_dir: Path
     journal_jsonl: Path
+    portfolio_jsonl: Path
 
     def all_dirs(self) -> list[Path]:
         return [
@@ -132,6 +136,7 @@ def get_paths() -> Paths:
         concat_std_cf=concat_std / "CF",
         derived_dir=derived,
         fundamentals_parquet=derived / f"fundamentals{suffix}",
+        quarterly_parquet=derived / f"quarterly{suffix}",
         cik_ticker_parquet=derived / "cik_ticker.parquet",
         sic_parquet=derived / "sic_by_adsh.parquet",
         raw_bs_tags_parquet=derived / "raw_bs_tags.parquet",
@@ -143,9 +148,12 @@ def get_paths() -> Paths:
         splits_parquet=prices / "splits.parquet",
         dividends_parquet=prices / "dividends.parquet",
         prices_meta_parquet=prices / "_prices_meta.parquet",
+        rates_parquet=prices / "rates.parquet",
+        factors_parquet=prices / "factors.parquet",
         track_dir=track,
         track_records_dir=track / "records",
         journal_jsonl=track / "journal.jsonl",
+        portfolio_jsonl=track / "portfolio.jsonl",
     )
 
 

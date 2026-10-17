@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from lti import prices as prices_mod, stock as stock_mod
-from lti.app import theme
+from lti.app import theme, widgets
 
 theme.header(
     "🔬 Stock detail",
@@ -17,19 +17,7 @@ theme.header(
 )
 
 
-@st.cache_data(show_spinner=False)
-def _load_fund() -> pd.DataFrame:
-    from lti.fundamentals import load_fundamentals
-
-    return load_fundamentals()
-
-
-try:
-    fund = _load_fund()
-except FileNotFoundError:
-    st.error("No fundamentals table. Run `lti build-fundamentals` first.")
-    st.stop()
-
+fund = widgets.fundamentals()
 px = prices_mod.load_price_data()
 panel = px.adj  # total return: the price chart
 
@@ -78,7 +66,8 @@ if not annual.empty:
     c2.metric("Fiscal years", f"{int(annual['fiscal_year'].min())}–{int(annual['fiscal_year'].max())}")
 if psym:
     ps = panel[psym].dropna()
-    c3.metric("Price history", f"{ps.index.min().date()} → {ps.index.max().date()}")
+    c3.metric("Price history", f"{ps.index.min():%Y}–{ps.index.max():%Y}",
+              help=f"{ps.index.min().date()} to {ps.index.max().date()}, {len(ps):,} trading days.")
     if len(ps) > 1:
         c4.metric("Total price return", f"{ps.iloc[-1] / ps.iloc[0] - 1:.0%}")
 else:
@@ -220,7 +209,8 @@ with cf_tab:
         _year_bar(annual, stock_mod.CASHFLOW_ITEMS)
         theme.note(
             "<code>cfo</code> operating cash flow · <code>capex</code> capital expenditure "
-            "(as reported) · <code>free_cash_flow</code> = cfo − |capex|."
+            "(as reported) · <code>stock_comp</code> stock-based pay, which cfo adds back as non-cash · "
+            "<code>free_cash_flow</code> = cfo − |capex| − stock_comp: pay in shares is still pay."
         )
 
 with div_tab:
@@ -303,7 +293,14 @@ with val_tab:
         )
 
 with fv_tab:
-    from lti.valuation import MODELS, ValuationAssumptions, add_valuation_models, historical_cagr
+    from lti.valuation import (
+        MODEL_DOCS,
+        MODELS,
+        ValuationAssumptions,
+        add_valuation_models,
+        explain,
+        historical_cagr,
+    )
 
     if annual.empty or not psym:
         st.info("Fair-value models need annual fundamentals and a cached price.")
@@ -356,7 +353,7 @@ with fv_tab:
             )
             basis = "normalized" if basis_label.startswith("Normalized") else "latest"
             a1, a2, a3 = st.columns(3)
-            disc = a1.slider("Discount rate", 0.05, 0.15, 0.09, 0.005, format="%.3f")
+            rate_kw = widgets.rates(pd.Timestamp.today(), a1)
             term = a2.slider("Terminal growth", 0.0, 0.04, 0.025, 0.005, format="%.3f")
             years = a3.slider("DCF window (years)", 5, 15, 10)
 
@@ -376,9 +373,7 @@ with fv_tab:
                 "5-year CAGR needs positive EPS / revenue at both ends."
             )
 
-        assumptions = ValuationAssumptions(
-            discount_rate=disc, terminal_growth=term, dcf_years=years, fixed_growth=g_val
-        )
+        assumptions = ValuationAssumptions(**rate_kw, terminal_growth=term, dcf_years=years, fixed_growth=g_val)
         v = add_valuation_models(latest, pd.Series({cik: cur_price}), assumptions=assumptions, basis=basis)
         row = v.iloc[0]
 
@@ -408,8 +403,7 @@ with fv_tab:
                     hovertemplate="%{y}<br>$%{x:,.2f} per share<extra></extra>",
                 )
             )
-            fig.update_traces(marker_line_width=0, marker_cornerradius=4)
-            fig.update_layout(bargap=0.4)
+            theme.bar_marks(fig, color=None, gap=0.4)
             fig.add_vline(x=cur_price, line_width=1.5, line_color=theme.INK_2)
             fig.add_annotation(
                 x=cur_price, y=1.0, yref="paper", yanchor="bottom", xanchor="left",
@@ -429,9 +423,10 @@ with fv_tab:
 
             table = pd.DataFrame(
                 {
-                    "model": present,
+                    "model": [MODEL_DOCS[m].label for m in present],
                     "fair_value": [row[m] for m in present],
                     "upside_vs_price": [row[f"{m}_upside"] for m in present],
+                    "the arithmetic": [explain(m, row, assumptions) for m in present],
                 }
             )
             st.dataframe(
@@ -443,10 +438,25 @@ with fv_tab:
             bits = [f"{'normalized' if basis == 'normalized' else 'latest-year'} earnings",
                     f"growth **{g_used:.1%}**" if pd.notna(g_used) else None,
                     f"dividend yield **{dy_used:.1%}**" if dy_used is not None and pd.notna(dy_used) else None,
-                    f"discount rate **{disc:.1%}**"]
-            st.caption("Inputs: " + " · ".join(b for b in bits if b) + ". "
-                       "DCF uses FCF/share; EPV capitalises EPS with no growth; Graham number "
-                       "= √(22.5·EPS·BVPS); Lynch fair P/E = growth% + yield%; DDM is Gordon growth.")
+                    f"discount rate **{assumptions.discount_rate:.1%}**"]
+            st.caption("Inputs: " + " · ".join(b for b in bits if b) + ". Each model's equation, "
+                       "and where it breaks down, is spelled out below.")
+
+            with st.expander("What each equation does — and what it assumes"):
+                st.caption(
+                    "Same six models everywhere in this project. Each line below is the equation with "
+                    f"{symbol}'s own numbers in it, at the assumptions set above."
+                )
+                shown = [m for m in MODELS if m in v.columns]
+                widgets.model_notes(shown, {m: explain(m, row, assumptions) for m in shown}, symbol)
+                st.markdown(
+                    f"**Blended** — the mean of the {len(present)} models that produced a number "
+                    f"for {symbol}. Each counts equally, so one model's extreme moves it — and four of "
+                    "the six multiply the same EPS, so their agreement mostly restates that one number. "
+                    "The DCF (cash flow) and the dividend discount (cash actually paid out) are the two "
+                    "carrying separate evidence; the spread between all of them is the real output."
+                )
+
             st.warning(
                 "Rough estimates, sensitive to the assumptions above — normalized earnings assume "
                 "the last few years are a fair guide to the next. Not investment advice."

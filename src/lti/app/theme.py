@@ -163,14 +163,20 @@ def show(fig, *, height: int | None = None, legend: bool | None = None, **layout
     )
 
 
-def bar_marks(fig, color: str = BLUE, *, radius: int = 4):
-    """Thin bars with rounded data-ends and a surface gap between neighbours."""
-    fig.update_traces(marker_color=color, marker_line_width=0)
+def bar_marks(fig, color: str | None = BLUE, *, radius: int = 4, gap: float = 0.34):
+    """Thin bars with rounded data-ends and a surface gap between neighbours.
+
+    ``color=None`` keeps whatever colour the trace already carries — a bar chart
+    that colours each bar by its own sign sets that when it builds the trace.
+    """
+    if color is not None:
+        fig.update_traces(marker_color=color)
+    fig.update_traces(marker_line_width=0)
     try:  # cornerradius needs a recent plotly; not worth failing a page over
         fig.update_traces(marker_cornerradius=radius)
     except (ValueError, TypeError):
         pass
-    fig.update_layout(bargap=0.34, bargroupgap=0.12)
+    fig.update_layout(bargap=gap, bargroupgap=0.12)
     return fig
 
 

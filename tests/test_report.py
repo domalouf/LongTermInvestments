@@ -49,9 +49,40 @@ def test_build_view_drops_missing_and_resets_index(ranked):
 
 def test_dividend_yield_renders_as_a_percent_and_a_non_payer_as_a_dash(ranked):
     html = report.render_html(ranked, asof="2026-09-05", params={})
-    assert "<th>Dividend yield</th>" in html
-    assert '<td class="num">4.2%</td>' in html
-    assert '<td class="num">0.0%</td>' not in html  # BBB pays nothing, so it gets a dash
+    assert '<span class="dividend-yield num">Dividend yield</span>' in html
+    assert '<span class="dividend-yield num">4.2%</span>' in html
+    assert ">0.0%<" not in html  # BBB pays nothing, so it gets a dash
+
+
+def test_html_explains_every_model(ranked):
+    """The published page carries the equations, not just the ranked numbers."""
+    import html as html_mod
+
+    from lti.valuation import MODEL_DOCS, MODELS
+
+    page = report.render_html(ranked, asof="2026-09-05", params={})
+    assert '<details class="models">' in page  # collapsed, so the list still opens first
+    for m in MODELS:
+        doc = MODEL_DOCS[m]
+        assert f"<h3>{doc.label}</h3>" in page
+        assert html_mod.escape(doc.at_defaults) in page
+        assert html_mod.escape(doc.misleads) in page
+    assert "√(22.5 × EPS × book value per share)" in page
+
+
+def test_cli_explains_every_model(capsys):
+    """`lti explain-models` prints the equations for anyone not using the GUI."""
+    import argparse
+
+    from lti.cli import cmd_explain_models
+    from lti.valuation import MODEL_DOCS, MODELS
+
+    cmd_explain_models(argparse.Namespace(width=92))
+    out = capsys.readouterr().out
+    for m in MODELS:
+        assert MODEL_DOCS[m].label in out
+        assert MODEL_DOCS[m].formula in out  # formulas print unwrapped
+        assert m in out  # the column name, so the output maps onto the data
 
 
 def test_build_payload_shape_and_null_coercion(ranked):
@@ -94,10 +125,17 @@ def test_render_html_is_self_contained_and_escaped(ranked):
     assert "+6%" in doc and "90%" in doc  # revenue growth, cash conversion
 
 
+def test_render_html_says_not_advice_before_the_table(ranked, empty):
+    doc = report.render_html(ranked, asof="2026-09-05")
+    assert '<p class="notice"><strong>Not investment advice.</strong>' in doc
+    assert doc.index('class="notice"') < doc.index('class="list"')
+    assert 'class="notice"' in report.render_html(empty, asof="2026-09-05")
+
+
 def test_render_html_empty_has_message(empty):
     doc = report.render_html(empty, asof="2026-09-05")
     assert "No names pass the filters for 2026-09-05" in doc
-    assert "<table" not in doc
+    assert 'class="list"' not in doc and "<details class=\"row\"" not in doc
 
 
 def test_write_artifacts_writes_all_three(tmp_path, ranked):
@@ -122,3 +160,38 @@ def test_write_artifacts_uses_shared_generated_timestamp(tmp_path, ranked):
     payload = json.loads((tmp_path / "undervalued.json").read_text())
     assert payload["generated_utc"] == "2026-09-05T12:00:00+00:00"
     assert "2026-09-05 12:00:00 UTC" in (tmp_path / "index.html").read_text()
+
+
+def test_each_row_opens_to_how_its_fair_value_was_decided(ranked):
+    """The rows are the breakdowns: each name's row opens in place to its arithmetic — the mean,
+    the equations with its numbers, the variables — with no second list repeating the names."""
+    r = ranked.assign(
+        fair_value_est=[23.46, 10.86],
+        eps_used=[2.0, 1.0], bvps_used=[10.0, 5.0], fcf_ps_used=[1.5, np.nan], dps_used=[0.42, np.nan],
+        est_growth=[0.06, 0.0], graham_number=[21.21, 10.61], epv_value=[22.22, 11.11],
+        lynch_fair_value=[20.4, 0.0], graham_intrinsic=[np.nan, np.nan], dcf_value=[30.0, np.nan],
+        ddm_value=[np.nan, np.nan],
+    )
+    page = report.render_html(r, asof="2026-09-05", params={"discount_rate": 0.09})
+    assert page.count('<details class="row"') == 2
+    assert page.count("Alpha Inc") == 1  # one row per name, not a row plus a repeat below
+    # the row is the <summary>, so clicking anywhere on it opens it; deep links still land on it
+    aaa = page[page.index('<details class="row" id="why-AAA">'):page.index('id="why-BBB"')]
+    summary = aaa[aaa.index("<summary"):aaa.index("</summary>")]
+    assert "AAA" in summary and "Alpha Inc" in summary and "+150%" in summary
+    assert "<a " not in summary  # nothing clickable inside the row competes with opening it
+    why = aaa[aaa.index("</summary>"):]
+    assert "√(22.5 × EPS $2.00 × BVPS $10.00) = $21.21" in why
+    assert "EPS $2.00 / 9.0% = $22.22" in why
+    assert "mean of 4 values: ($20.40 + $21.21 + $22.22 + $30.00) ÷ 4 = $23.46" in why
+    assert "Normalized EPS" in why and "Where it comes from" in why
+    assert "How each fair value was decided" not in page
+    assert "<script" not in page.lower()
+
+
+def test_csv_and_json_carry_the_model_values_and_inputs(ranked):
+    r = ranked.assign(epv_value=[22.0, 11.0], eps_used=[2.0, 1.0])
+    header = report.render_csv(r).splitlines()[0].split(",")
+    assert "epv_value" in header and "eps_used" in header
+    assert "epv_value" in report.build_payload(r, asof="2026-09-05")["columns"]
+    assert "epv_value" not in report.build_view(r).columns  # the table itself stays as it was

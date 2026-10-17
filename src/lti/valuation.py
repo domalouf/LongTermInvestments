@@ -6,6 +6,33 @@ vectorised over pandas Series (index = cik, the same as a fundamentals
 snapshot), return ``NaN`` where the model does not apply (negative earnings,
 no dividend, …), and never raise on bad inputs.
 
+Six equations, and each one answers a different question:
+
+===================  ==========================================  ======================
+model                equation                                    what it needs
+===================  ==========================================  ======================
+two-stage DCF        Σ FCF·(1+g)ᵗ/(1+r)ᵗ + terminal/(1+r)ᴺ       FCF per share
+Peter Lynch          EPS · (growth% + dividend yield%)           EPS, growth
+Graham number        √(22.5 · EPS · BVPS)                        EPS, book value
+Graham revised       EPS · (8.5 + 2g) · 4.4/Y                    EPS, growth
+dividend discount    D₀·(1+g) / (r − g)                          dividends paid
+earnings power       EPS / r                                     EPS
+===================  ==========================================  ======================
+
+Each function's docstring works its equation through in full — where the
+constants come from, what the model takes on faith, when it declines to answer.
+:data:`MODEL_DOCS` carries the same explanations as data, for the pages and the
+published HTML to render, and :func:`explain` prints one company's own numbers
+in place of the symbols.
+
+:func:`add_valuation_models` runs all six and blends them into
+``fair_value_est``, the *mean* of those that produced a number — every model
+that answered counts equally, so one model's extreme pulls the answer further
+than it would a median. Note that four of the six
+multiply the same EPS, so six values agreeing is not six independent opinions;
+the DCF (cash flow) and the DDM (dividends actually paid) are the two carrying
+separate evidence.
+
 The models run on one of two earnings bases:
 
 ``normalized`` (the default)
@@ -28,13 +55,15 @@ Growth is clipped to ``[0, growth_cap]`` either way; pass an explicit
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
-from lti.metrics import _safe_div
+from lti import rates as rates_mod
+from lti.metrics import _col, _safe_div
 
 if TYPE_CHECKING:
     from lti.prices import PriceData
@@ -72,19 +101,233 @@ class ValuationAssumptions:
         self.terminal_growth = min(self.terminal_growth, self.discount_rate - 0.01)
 
 
+# The return demanded of stocks over the 10-year Treasury: the market-rates
+# discount rate is the two added. At a 4% Treasury it's the fixed default's 9%.
+EQUITY_PREMIUM = 0.05
+
+
+def market_assumptions(
+    asof,
+    rates: pd.DataFrame,
+    base: ValuationAssumptions | None = None,
+    equity_premium: float = EQUITY_PREMIUM,
+) -> ValuationAssumptions:
+    """``base`` at the interest rates of ``asof`` (:mod:`lti.rates`).
+
+    The discount rate becomes the 10-year Treasury that day plus
+    ``equity_premium``, and the bond yield in Graham's revised formula the AAA
+    corporate yield. A rate with nothing cached near ``asof`` keeps ``base``'s
+    fixed value, so an empty ``rates`` gives ``base`` back unchanged.
+    """
+    base = base or ValuationAssumptions()
+    now = rates_mod.rates_asof(rates, asof)
+    changes = {}
+    if pd.notna(now["treasury_10y"]):
+        changes["discount_rate"] = float(now["treasury_10y"]) + equity_premium
+    if pd.notna(now["aaa"]):
+        changes["bond_yield"] = float(now["aaa"])
+    return dataclasses.replace(base, **changes) if changes else base
+
+
+@dataclass(frozen=True)
+class ModelDoc:
+    """One model explained in one place.
+
+    The Stock page, the Undervalued page, the published ``index.html`` and the
+    README all render these instead of keeping their own wording, so an
+    explanation can't drift away from the equation it describes.
+    """
+
+    label: str        # display name
+    formula: str      # the equation, in symbols
+    idea: str         # the reasoning the equation encodes, in one sentence
+    inputs: str       # what goes in, and where each input comes from
+    at_defaults: str  # what the equation works out to under ValuationAssumptions()
+    silent: str       # when it declines to produce a number (NaN)
+    misleads: str     # where the equation breaks down
+
+
+# Keyed by fair-value column, in MODELS (display) order. Every multiple quoted
+# in ``at_defaults`` is at ValuationAssumptions() — r 9%, terminal 2.5%, N 10,
+# growth capped at 15%, AAA yield 4.5%.
+MODEL_DOCS: dict[str, ModelDoc] = {
+    "dcf_value": ModelDoc(
+        label="Two-stage DCF",
+        formula=(
+            "value = Σ FCF·(1+g)^t / (1+r)^t  for t = 1…N,  "
+            "plus  [FCF·(1+g)^N·(1+g_term) / (r − g_term)] / (1+r)^N"
+        ),
+        idea=(
+            "A share is worth the cash the business will hand its owners, with cash further out "
+            "worth less than cash now."
+        ),
+        inputs=(
+            "free cash flow per share — the normalized median FCF over today's share count, or "
+            "operating cash flow − capex − stock-based pay from the latest 10-K — grown at g (clipped to "
+            "[0, growth_cap]) "
+            "for N years, then forever at g_term, all discounted at the required return r."
+        ),
+        at_defaults=(
+            "ten years of cash plus a perpetuity: about 19× today's FCF per share for a 5% grower, "
+            "13× for a flat one."
+        ),
+        silent="FCF per share ≤ 0 — a business burning cash has no cash to discount.",
+        misleads=(
+            "The terminal lump is most of the answer — ≈57% of it for a 5% grower — so the value is "
+            "largely a bet on the perpetuity, and a point off r or onto g_term moves it more than the "
+            "whole first stage does. It also values today's share count: future dilution is invisible."
+        ),
+    ),
+    "lynch_fair_value": ModelDoc(
+        label="Peter Lynch",
+        formula="value = EPS × (growth% + dividend yield%)",
+        idea=(
+            "Lynch's rule of thumb: a growth company is fairly priced at a P/E equal to its growth rate "
+            "(PEG = 1), and a dividend is return you collect without needing growth, so the yield adds to it."
+        ),
+        inputs=(
+            "EPS (normalized or latest-year), the growth estimate in percentage points (clipped to "
+            "[0, lynch_growth_cap]) and the trailing dividend yield in percentage points."
+        ),
+        at_defaults=(
+            "a fair P/E of growth + yield: 14× earnings for a 12% grower yielding 2%, 25× at the "
+            "25% growth cap, and for a flat non-payer, nothing at all."
+        ),
+        silent="EPS ≤ 0.",
+        misleads=(
+            "It is a heuristic, not a valuation: no discount rate, no horizon, no balance sheet. Growth is "
+            "the whole answer, which makes it the most sensitive of the six to a growth estimate that here "
+            "comes from a five-year revenue trend rather than the analyst forecasts Lynch was reading. A "
+            "profitable company with no growth and no dividend fairly values at $0 — the rule showing its "
+            "limits rather than a data error, and a $0 that still counts as a model in the blend."
+        ),
+    ),
+    "graham_number": ModelDoc(
+        label="Graham number",
+        formula="value = √(22.5 × EPS × book value per share) = √(15·EPS × 1.5·BVPS)",
+        idea=(
+            "Graham's two defensive-investor screens — pay no more than 15× earnings and no more than "
+            "1.5× book — combined into one ceiling that lets a company be dearer on one if it is cheaper "
+            "on the other (P/E × P/B ≤ 22.5)."
+        ),
+        inputs="EPS and book value per share (equity ÷ shares outstanding).",
+        at_defaults=(
+            "the geometric mean of '15× earnings' and '1.5× book': 15× EPS for a company earning 10% on "
+            "its book value, and less than that for one earning more on less book."
+        ),
+        silent="EPS or book value per share ≤ 0 — the product under the root has to be positive.",
+        misleads=(
+            "It is a ceiling for a defensive buy, not an estimate of worth, and it is half a book-value "
+            "measure: it understates asset-light businesses whose R&D and brands are expensed rather than "
+            "capitalised, and flatters ones carrying goodwill from acquisitions that didn't work."
+        ),
+    ),
+    "graham_intrinsic": ModelDoc(
+        label="Graham revised",
+        formula="value = EPS × (8.5 + 2g) × 4.4 / Y      (g in percentage points, Y = AAA yield in percent)",
+        idea=(
+            "Graham's 1962 multiple table: 8.5× earnings for a company expected to grow not at all, plus "
+            "2 more turns of P/E for every point of annual growth, the whole thing rescaled for interest "
+            "rates — 4.4% was the AAA corporate yield when he wrote it down."
+        ),
+        inputs="EPS, the growth estimate in percentage points (clipped to [0, 20]) and bond_yield (floored at 0.5%).",
+        at_defaults=(
+            "at a 4.5% AAA yield the rate term is 0.98, so essentially Graham's own table: 8.3× earnings at "
+            "no growth, 18.1× at 5%, 37.6× at the 15% growth cap."
+        ),
+        silent="EPS ≤ 0.",
+        misleads=(
+            "Graham later disowned it as too crude, and it is close to linear in g — two turns of P/E per "
+            "growth point is generous at the top of the range, which is what the growth cap is holding back. "
+            "The rate term also cuts both ways: it marks every company up as bond yields fall."
+        ),
+    ),
+    "ddm_value": ModelDoc(
+        label="Dividend discount",
+        formula="value = D1 / (r − g) = dividend × (1 + g) / (r − g)",
+        idea=(
+            "Gordon growth: value only the cash actually paid out, as a perpetuity growing at g and "
+            "discounted at the required return r."
+        ),
+        inputs=(
+            "the last twelve months of dividends actually paid (from the price cache, not the sparse "
+            "cash-flow tag), grown at the dividend's own five-year rate where there is one — a company can "
+            "grow revenue and hold its payout flat — and clipped to [0, terminal_growth]."
+        ),
+        at_defaults="15.8× the trailing dividend (growth capped at 2.5%, discounted at 9%).",
+        silent="no dividend — which is most of the market, and why the blend needs a minimum model count.",
+        misleads=(
+            "Capping perpetual growth at the terminal rate is what keeps the formula finite as g approaches r, "
+            "but it values a genuine dividend grower as if it grew 2.5% forever, so this is usually the lowest "
+            "of the six. It also ignores retained earnings and buybacks: a company returning its cash by "
+            "repurchase is worth nothing here."
+        ),
+    ),
+    "epv_value": ModelDoc(
+        label="Earnings power",
+        formula="value = EPS / r",
+        idea=(
+            "Greenwald's Earnings Power Value: growth is the least knowable input, so drop it and capitalise "
+            "what the business earns if it never grows at all."
+        ),
+        inputs="EPS (normalized or latest-year) and the discount rate r.",
+        at_defaults="a flat 11.1× earnings (1 ÷ 9%) — 14.3× at a 7% required return, 8.3× at 12%.",
+        silent="EPS ≤ 0.",
+        misleads=(
+            "Greenwald's version normalizes earnings across a full cycle and adjusts for maintenance capex, "
+            "excess cash and one-offs; this one capitalises reported EPS as it stands. Being a single "
+            "multiple, it is also a pure restatement of the discount rate you chose."
+        ),
+    ),
+}
+
+
 # --- individual models --------------------------------------------------
 
 
 def graham_number(eps: pd.Series, bvps: pd.Series) -> pd.Series:
-    """√(22.5 · EPS · book value per share) — Graham's ceiling for a defensive buy
-    (22.5 = 15× earnings × 1.5× book)."""
+    """√(22.5 · EPS · book value per share) — Graham's ceiling for a defensive buy.
+
+    The *Intelligent Investor* asks a defensive buyer for two things at once: no
+    more than 15× earnings and no more than 1.5× book value. Multiply the two
+    limits and the constant is 22.5 — the equation is just that pair of screens
+    rearranged, so a company may be dearer on one where it is cheaper on the
+    other::
+
+        price ≤ 15 · EPS   and   price ≤ 1.5 · BVPS
+        → price² ≤ 22.5 · EPS · BVPS
+        → price ≤ √(15·EPS × 1.5·BVPS)
+
+    Which makes the result the geometric mean of the two ceilings, not their
+    average: it lands at 15× EPS for a company earning 10% on book, and below
+    that for one earning more on less book — why this is usually the lowest of
+    the six for an asset-light business.
+
+    NaN unless both inputs are positive; with either negative the product under
+    the root is meaningless rather than small.
+    """
     x = 22.5 * eps * bvps
     return np.sqrt(x.where(x > 0))
 
 
 def graham_intrinsic(eps: pd.Series, growth: pd.Series, bond_yield: float) -> pd.Series:
-    """Graham's revised formula: EPS · (8.5 + 2g) · 4.4 / Y, with g in percentage
-    points (capped at 20) and Y the AAA bond yield in percent."""
+    """Graham's revised formula: ``EPS · (8.5 + 2g) · 4.4 / Y``.
+
+    Three pieces. ``8.5`` is the P/E Graham put on a company expected to grow
+    not at all. ``2g`` adds two turns of that multiple for every point of
+    expected annual growth (``g`` in *percentage points* — 5 for 5%, not 0.05),
+    which is where nearly all the variation comes from. ``4.4 / Y`` rescales the
+    lot for interest rates: 4.4% was the AAA corporate yield in 1962, ``Y`` is
+    today's in percent, so the same earnings are worth less when bonds pay more.
+
+    Growth is clipped to [0, 20] points and ``Y`` floored at 0.5%, which is what
+    keeps a runaway growth estimate or a zero yield from producing an absurd
+    multiple. At the default 4.5% yield the rate term is 0.98, leaving roughly
+    Graham's own table: 8.3× earnings at no growth, 18.1× at 5%, 37.6× at 15%.
+
+    NaN on non-positive EPS. Graham himself came to think the formula too
+    crude to rely on; it is here as one vote among six, not as an answer.
+    """
     g_pts = (growth.fillna(0.0) * 100).clip(0, 20)
     y_pct = max(bond_yield, 0.005) * 100
     return eps.where(eps > 0) * (8.5 + 2 * g_pts) * 4.4 / y_pct
@@ -93,16 +336,53 @@ def graham_intrinsic(eps: pd.Series, growth: pd.Series, bond_yield: float) -> pd
 def lynch_fair_value(
     eps: pd.Series, growth: pd.Series, dividend_yield: pd.Series | None, growth_cap: float
 ) -> pd.Series:
-    """Peter Lynch: a fair P/E equals the earnings growth rate in percent, plus
-    the dividend yield (``fair value = EPS · (g% + div_yield%)``)."""
+    """Peter Lynch: ``fair value = EPS · (g% + dividend yield%)``.
+
+    *One Up on Wall Street*'s rule of thumb — a growth company is fairly priced
+    when its P/E equals its growth rate (PEG = 1) — with the dividend yield
+    added, since a payout is return that arrives whether or not the growth does.
+    A 12% grower yielding 2% earns a fair P/E of 14; on $3 of EPS that is $42.
+
+    Both rates are in percentage points, and growth is clipped to
+    [0, ``growth_cap``] — here ``lynch_growth_cap`` (25%), looser than the cap
+    the other models get, so it only binds when you hand the models a growth
+    rate of your own. The estimate they use by default is already clipped lower.
+
+    NaN on non-positive EPS. A profitable company with no growth and no
+    dividend fairly values at $0: the rule says a business going nowhere and
+    paying nothing out is worth nothing, which is the rule showing its limits
+    rather than a data error.
+    """
     g_pts = (growth.fillna(0.0).clip(0, growth_cap)) * 100
     dy_pts = (dividend_yield.fillna(0.0) * 100) if dividend_yield is not None else 0.0
     return eps.where(eps > 0) * (g_pts + dy_pts)
 
 
 def two_stage_dcf(fcf_per_share: pd.Series, growth: pd.Series, a: ValuationAssumptions) -> pd.Series:
-    """PV of ``dcf_years`` of FCF/share growing at ``growth`` (capped), plus a
-    Gordon terminal value at ``terminal_growth``, discounted at ``discount_rate``."""
+    """Present value of ``dcf_years`` of free cash flow per share, plus a perpetuity.
+
+    Stage one walks the cash forward and discounts it back, year by year: each
+    year's FCF/share is the last one grown at ``g`` (clipped to
+    [0, ``growth_cap``]), and year ``t``'s cash is worth ``1 / (1 + r)^t`` of
+    its face value today. Stage two assumes the business then settles into
+    growing at ``terminal_growth`` forever, and capitalises that with Gordon
+    growth — ``FCF_N · (1 + g_term) / (r − g_term)`` — a lump sitting at year
+    ``N``, so it is discounted back ``N`` years as well::
+
+        Σ FCF·(1+g)^t / (1+r)^t   for t = 1…N
+        + [FCF_N·(1+g_term) / (r − g_term)] / (1+r)^N
+
+    ``ValuationAssumptions`` forces ``terminal_growth`` at least a point below
+    ``discount_rate``; without that the denominator goes to zero and the value
+    to infinity. At the defaults the whole thing comes to about 19× current
+    FCF/share for a 5% grower and 13× for a flat one — of which the terminal
+    lump is ≈57% and ≈51% respectively. That is the model's weak point: most of
+    the answer is the part furthest out and least knowable, and it moves more
+    on a point of ``r`` than on the entire first stage.
+
+    NaN where FCF per share is not positive: there is no cash to discount, and
+    projecting a burn forward would only produce a confident negative.
+    """
     r, gt, n = a.discount_rate, a.terminal_growth, a.dcf_years
     g1 = growth.fillna(0.0).clip(0, a.growth_cap)
 
@@ -117,15 +397,45 @@ def two_stage_dcf(fcf_per_share: pd.Series, growth: pd.Series, a: ValuationAssum
 
 
 def ddm_value(dps: pd.Series, growth: pd.Series, a: ValuationAssumptions) -> pd.Series:
-    """Gordon growth: ``D1 / (r - g)``. Perpetual dividend growth is capped at the
-    terminal rate — near ``r`` the formula explodes and is meaningless. Payers only."""
+    """Gordon growth on the dividend: ``D1 / (r − g)``, where ``D1 = D0 · (1 + g)``.
+
+    The sum of a dividend growing at ``g`` forever, discounted at ``r``, closes
+    to that one term. ``D0`` is the trailing twelve months of payments;
+    grow it one year to get next year's, then capitalise the stream at the
+    spread between the required return and the growth rate — a spread of 6.5
+    points at the defaults, so 15.8× the current dividend.
+
+    That spread is the whole model, and it is why growth is clipped to
+    [0, ``terminal_growth``]: as ``g`` approaches ``r`` the denominator goes to
+    zero and the value to infinity, and a dividend cannot outgrow its discount
+    rate forever in any case. The cap is conservative on purpose — it values a
+    genuine dividend grower as if it grew 2.5% a year — which is why this is
+    usually the lowest of the six.
+
+    NaN for a non-payer, which is most of the market: the model has nothing to
+    value, and 0 would be a claim rather than an abstention. Buybacks and
+    retained earnings are invisible to it either way.
+    """
     g = growth.fillna(0.0).clip(0.0, a.terminal_growth)
     d1 = dps * (1 + g)
     return (d1 / (a.discount_rate - g)).where(dps > 0)
 
 
 def epv_value(eps: pd.Series, discount_rate: float) -> pd.Series:
-    """Earnings Power Value — no-growth capitalised earnings, ``EPS / r``."""
+    """Earnings Power Value — no-growth capitalised earnings, ``EPS / r``.
+
+    Greenwald's argument is that growth is the least knowable input in any
+    valuation, so the sturdier question is what the business is worth if it
+    never grows at all: a perpetuity of today's earnings, which is ``EPS / r``.
+    That is a single multiple — 11.1× at the default 9% required return, 14.3×
+    at 7%, 8.3× at 12% — so the number says as much about the discount rate you
+    chose as about the company.
+
+    Simplified from the textbook version, which normalizes earnings over a full
+    cycle and adjusts for maintenance capex, excess cash and one-offs; on the
+    ``normalized`` basis the five-year median EPS stands in for the first of
+    those and nothing stands in for the rest. NaN on non-positive EPS.
+    """
     return eps.where(eps > 0) / discount_rate
 
 
@@ -159,6 +469,140 @@ def historical_cagr(annual: pd.DataFrame, column: str = "eps", years: int = 5) -
     return (last / first) ** (1 / n) - 1
 
 
+# --- explaining one company's number -----------------------------------
+
+
+def _money(x: float | None) -> str:
+    if x is None or pd.isna(x):
+        return "—"
+    x = float(x)
+    return f"-${abs(x):,.2f}" if x < 0 else f"${x:,.2f}"
+
+
+def _pct(x: float | None, digits: int = 1) -> str:
+    return "—" if x is None or pd.isna(x) else f"{float(x) * 100:.{digits}f}%"
+
+
+def explain(model: str, row: pd.Series, assumptions: ValuationAssumptions | None = None) -> str:
+    """``model``'s equation with one company's own numbers substituted into it.
+
+    ``row`` is a row of an :func:`add_valuation_models` frame — the ``*_used``
+    columns it carries are the inputs that model actually ran on, after every
+    clip. Returns a line like ``√(22.5 × EPS $3.05 × BVPS $12.40) = $29.18``;
+    an input the frame doesn't carry shows as ``—``, and a model that stayed
+    silent says why, in the words of its :data:`MODEL_DOCS` entry.
+
+    Presentation lives here rather than in the pages so the Stock page, the
+    Undervalued page and the published HTML show the same arithmetic.
+    """
+    if model not in MODEL_DOCS:
+        raise KeyError(f"unknown model {model!r} — expected one of {list(MODEL_DOCS)}")
+    a = assumptions or ValuationAssumptions()
+    doc = MODEL_DOCS[model]
+    value = row.get(model)
+
+    eps, bvps = row.get("eps_used"), row.get("bvps_used")
+    fcf_ps, dps = row.get("fcf_ps_used"), row.get("dps_used")
+    g = row.get("est_growth")
+    g = 0.0 if pd.isna(g) else float(g)
+    dy = row.get("dividend_yield")
+    dy = 0.0 if dy is None or pd.isna(dy) else float(dy)
+    g_ddm = row.get("ddm_growth_used")
+    if g_ddm is None or pd.isna(g_ddm):
+        g_ddm = min(max(g, 0.0), a.terminal_growth)
+
+    if model == "dcf_value":
+        lhs = (f"{a.dcf_years} years of FCF/share {_money(fcf_ps)} growing {_pct(min(max(g, 0.0), a.growth_cap))}, "
+               f"then {_pct(a.terminal_growth)} forever, discounted at {_pct(a.discount_rate)}")
+    elif model == "lynch_fair_value":
+        g_l = min(max(g, 0.0), a.lynch_growth_cap) * 100
+        lhs = f"EPS {_money(eps)} × (growth {g_l:.1f} + yield {dy * 100:.1f})"
+    elif model == "graham_number":
+        lhs = f"√(22.5 × EPS {_money(eps)} × BVPS {_money(bvps)})"
+    elif model == "graham_intrinsic":
+        lhs = (f"EPS {_money(eps)} × (8.5 + 2 × {min(max(g, 0.0), 0.20) * 100:.1f}) "
+               f"× 4.4 / {a.bond_yield * 100:.1f}")
+    elif model == "ddm_value":
+        lhs = (f"dividend {_money(dps)} × (1 + {_pct(g_ddm)}) / "
+               f"({_pct(a.discount_rate)} − {_pct(g_ddm)})")
+    else:  # epv_value
+        lhs = f"EPS {_money(eps)} / {_pct(a.discount_rate)}"
+
+    if value is None or pd.isna(value):
+        return f"{lhs} — no value: {doc.silent}"
+    return f"{lhs} = {_money(value)}"
+
+
+def explain_inputs(
+    row: pd.Series,
+    assumptions: ValuationAssumptions | None = None,
+    *,
+    treasury_10y: float | None = None,
+) -> list[tuple[str, str, str, str]]:
+    """Every variable the six equations ran on for one company, as
+    ``(symbol, name, value, where it comes from)`` rows.
+
+    Company inputs are read from the ``*_used`` columns :func:`add_valuation_models`
+    records, so they are the numbers after every clip; the shared ones come from
+    ``assumptions``. ``treasury_10y``, when the discount rate was built from it,
+    lets the rate say so.
+    """
+    a = assumptions or ValuationAssumptions()
+
+    def get(col):
+        v = row.get(col)
+        return None if v is None or pd.isna(v) else float(v)
+
+    g, g_raw, g_ddm = get("est_growth"), get("revenue_cagr"), get("ddm_growth_used")
+    d_growth = get("dividend_growth_5y")
+    if g_raw is not None:
+        g_src = (f"the {_pct(g_raw)} a year revenue trend over the last five fiscal years, "
+                 f"clipped to [0, {_pct(a.growth_cap, 0)}]")
+    else:
+        g_src = f"the revenue trend, clipped to [0, {_pct(a.growth_cap, 0)}]"
+    if d_growth is not None:
+        g_ddm_src = f"the dividend's own {_pct(d_growth)} five-year growth, clipped to [0, g_term]"
+    else:
+        g_ddm_src = "g, clipped to [0, g_term] — no dividend history to grow it by"
+    if treasury_10y is not None:
+        r_src = (f"the 10-year Treasury's {_pct(treasury_10y)} plus a "
+                 f"{_pct(a.discount_rate - treasury_10y)} equity risk premium")
+    else:
+        r_src = "the required return on a stock (a fixed assumption)"
+
+    return [
+        ("P", "Price", _money(get("price")), "split-adjusted close on the as-of date"),
+        ("EPS", "Normalized EPS", _money(get("eps_used")),
+         "median EPS of the last five fiscal years, restated for splits since"),
+        ("BVPS", "Book value / share", _money(get("bvps_used")), "equity ÷ shares outstanding, latest 10-K"),
+        ("FCF", "Free cash flow / share", _money(get("fcf_ps_used")),
+         "median free cash flow of the last five years ÷ today's share count"),
+        ("D₀", "Dividend / share", _money(get("dps_used")) if get("dps_used") else "none",
+         "the last twelve months of dividends actually paid"),
+        ("y", "Dividend yield", _pct(get("dividend_yield")) if get("dps_used") else "—", "D₀ ÷ P"),
+        ("g", "Growth", _pct(g), g_src),
+        ("g_div", "Dividend growth", _pct(g_ddm) if get("dps_used") else "—", g_ddm_src),
+        ("r", "Discount rate", _pct(a.discount_rate), r_src),
+        ("g_term", "Terminal growth", _pct(a.terminal_growth), "perpetual growth after the DCF's explicit years"),
+        ("N", "DCF years", f"{a.dcf_years}", "years of explicit growth before the perpetuity"),
+        ("Y", "AAA bond yield", _pct(a.bond_yield), "Moody's AAA corporate yield, for Graham revised"),
+    ]
+
+
+def explain_blend(row: pd.Series) -> str:
+    """How the models' values became ``fair_value_est`` and its upside, in one
+    line: the mean of the values that came out, then ÷ price − 1."""
+    vals = sorted(float(row[m]) for m in MODELS if m in row.index and pd.notna(row[m]))
+    if not vals:
+        return "no model produced a value"
+    fv, price = row.get("fair_value_est"), row.get("price")
+    line = (f"mean of {len(vals)} values: ({' + '.join(_money(v) for v in vals)}) ÷ {len(vals)}"
+            f" = {_money(fv)}")
+    if pd.notna(fv) and price is not None and pd.notna(price) and price > 0:
+        line += f"; upside = {_money(fv)} ÷ {_money(price)} − 1 = {float(fv) / float(price) - 1:+.0%}"
+    return line
+
+
 # --- public API ------------------------------------------------------
 
 
@@ -171,11 +615,25 @@ def add_valuation_models(
     basis: str = "normalized",
 ) -> pd.DataFrame:
     """Add every model's fair value + ``*_upside``, a blended ``fair_value_est``
-    (median of the models that produced a number) and ``fair_value_est_upside``.
+    (mean of the models that produced a number) and ``fair_value_est_upside``.
 
     ``price`` is indexed like ``df`` (by cik). ``basis`` picks the earnings the
     models run on (see the module docstring); ``normalized`` needs the
     :func:`lti.history.add_history` columns.
+
+    The blend is a mean, so every model that produced a number counts equally
+    — and one model's extreme moves it more than it would a median; the
+    :data:`MAX_UPSIDE` cut is what keeps a runaway value off the ranked list.
+    Nor are the models six independent opinions: four of
+    them (Lynch, both Grahams, EPV) multiply the same EPS, so their agreement
+    mostly restates that one number. The DCF runs on cash flow and the DDM on
+    dividends actually paid; those two are the ones carrying separate evidence.
+
+    Alongside the values it records the inputs they ran on — ``eps_used``,
+    ``bvps_used``, ``fcf_ps_used``, ``dps_used``, ``est_growth``,
+    ``ddm_growth_used`` and ``dividend_yield`` — so a fair value can be checked
+    against the numbers that produced it. :func:`explain` renders exactly that,
+    one model at a time.
     """
     if basis not in BASES:
         raise ValueError(f"basis must be one of {BASES}, not {basis!r}")
@@ -188,13 +646,11 @@ def add_valuation_models(
 
     shares = df["shares_outstanding"] if "shares_outstanding" in df.columns else None
     eps_col = "eps_norm" if basis == "normalized" else "eps"
-    eps = df[eps_col] if eps_col in df.columns else pd.Series(np.nan, index=df.index)
+    eps = _col(df, eps_col)
 
-    bvps = df["book_value_per_share"] if "book_value_per_share" in df.columns else None
-    if bvps is None and {"equity", "shares_outstanding"} <= set(df.columns):
+    bvps = _col(df, "book_value_per_share")
+    if "book_value_per_share" not in df.columns and {"equity", "shares_outstanding"} <= set(df.columns):
         bvps = _safe_div(df["equity"], df["shares_outstanding"])
-    if bvps is None:
-        bvps = pd.Series(np.nan, index=df.index)
 
     if basis == "normalized":
         fcf_ps = df["fcf_ps_norm"] if "fcf_ps_norm" in df.columns else None
@@ -225,6 +681,13 @@ def add_valuation_models(
     if div_yield is not None:
         df["dividend_yield"] = div_yield
 
+    # The inputs as fed to the models, whichever basis and columns they came
+    # from — an audit trail for the values below, and what explain() reads.
+    df["eps_used"] = eps
+    df["bvps_used"] = bvps
+    df["fcf_ps_used"] = fcf_ps if fcf_ps is not None else np.nan
+    df["dps_used"] = dps if dps is not None else np.nan
+
     df["graham_number"] = graham_number(eps, bvps)
     df["graham_intrinsic"] = graham_intrinsic(eps, growth, a.bond_yield)
     df["lynch_fair_value"] = lynch_fair_value(eps, growth, div_yield, a.lynch_growth_cap)
@@ -239,10 +702,11 @@ def add_valuation_models(
         d_growth = growth
         if "dividend_growth_5y" in df.columns:
             d_growth = df["dividend_growth_5y"].reindex(df.index).fillna(growth)
+        df["ddm_growth_used"] = d_growth.clip(lower=0.0, upper=a.terminal_growth)
         df["ddm_value"] = ddm_value(dps, d_growth, a)
 
     present = [m for m in MODELS if m in df.columns]
-    df["fair_value_est"] = df[present].replace([np.inf, -np.inf], np.nan).median(axis=1)
+    df["fair_value_est"] = df[present].replace([np.inf, -np.inf], np.nan).mean(axis=1)
     df["n_models"] = df[present].replace([np.inf, -np.inf], np.nan).notna().sum(axis=1)
 
     for m in [*present, "fair_value_est"]:
@@ -294,7 +758,8 @@ def rank_undervalued(
     ``min_profit_years`` of those years (a stable earner rather than one good
     year), with at least ``min_models`` models producing a number and a blended
     upside in ``(min_upside, max_upside]`` (the upper bound drops data errors),
-    then sort by ``fair_value_est_upside`` descending.
+    then sort by ``fair_value_est_upside`` descending. Without ``assumptions``
+    it values at the interest rates of ``asof`` (:func:`market_assumptions`).
 
     ``require_positive_eps`` asks for positive EPS both in the latest year and
     on the basis the models run on: a company losing money today isn't
@@ -306,6 +771,8 @@ def rank_undervalued(
     from lti import pit
 
     asof = pd.Timestamp(asof)
+    if assumptions is None:
+        assumptions = market_assumptions(asof, px.rates)
     snap = pit.priced_snapshot(fund, asof, px, with_history=True)
     if snap.empty:
         return snap
@@ -320,10 +787,7 @@ def rank_undervalued(
     if exclude_financials:
         from lti import sectors
 
-        if "is_financial" in snap.columns:
-            snap = snap[~snap["is_financial"].fillna(False).astype(bool)]
-        if "sic" in snap.columns:  # BDCs and other investment companies carry no SIC
-            snap = snap[~sectors.is_investment_company(snap["sic"])]
+        snap = sectors.drop_financials(snap)
     if min_profit_years is not None and "profit_years" in snap.columns:
         snap = snap[snap["profit_years"] >= min_profit_years]
     if min_roe is not None and "roe" in snap.columns:

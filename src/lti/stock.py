@@ -16,7 +16,7 @@ from lti import metrics as metrics_mod, pit
 # annual line items worth charting, in statement order
 INCOME_ITEMS = ["revenues", "gross_profit", "operating_income", "net_income"]
 BALANCE_ITEMS = ["assets", "liabilities", "equity"]
-CASHFLOW_ITEMS = ["cfo", "capex", "free_cash_flow"]
+CASHFLOW_ITEMS = ["cfo", "capex", "stock_comp", "free_cash_flow"]
 MARGIN_METRICS = ["gross_margin", "net_margin", "fcf_margin", "roe"]
 
 
@@ -77,6 +77,7 @@ def price_symbol(fund: pd.DataFrame, cik: int, panel: pd.DataFrame, preferred: s
 
 def annual_fundamentals(fund: pd.DataFrame, cik: int) -> pd.DataFrame:
     """One row per fiscal period for ``cik`` (latest restatement), metrics added."""
+    fund = pit.annual(fund)
     sub = fund[fund["cik"] == cik].copy()
     if sub.empty:
         return sub
@@ -89,12 +90,17 @@ def annual_fundamentals(fund: pd.DataFrame, cik: int) -> pd.DataFrame:
     return metrics_mod.add_fundamental_metrics(sub)
 
 
+def _events_for(events: pd.DataFrame | None, symbol: str, value: str) -> pd.Series:
+    """One ticker's ``{date: value}`` rows from a cached ``ticker, date, <value>`` table."""
+    if events is None or events.empty:
+        return pd.Series(dtype="float64")
+    sub = events[events["ticker"].astype(str).str.upper() == symbol.upper().strip()]
+    return pd.Series(sub[value].to_numpy(dtype="float64"), index=pd.to_datetime(sub["date"])).sort_index()
+
+
 def splits_for(splits: pd.DataFrame, symbol: str) -> pd.Series:
     """One ticker's ``{date: ratio}`` split history from the cached split table."""
-    if splits is None or splits.empty:
-        return pd.Series(dtype="float64")
-    sub = splits[splits["ticker"].astype(str).str.upper() == symbol.upper().strip()]
-    return pd.Series(sub["ratio"].to_numpy(dtype="float64"), index=pd.to_datetime(sub["date"])).sort_index()
+    return _events_for(splits, symbol, "ratio")
 
 
 def dividends_for(dividends: pd.DataFrame, symbol: str) -> pd.Series:
@@ -103,10 +109,7 @@ def dividends_for(dividends: pd.DataFrame, symbol: str) -> pd.Series:
     Already on today's share basis, like the split-adjusted close — no restating
     of its own, so a per-share amount here divides straight into a price there.
     """
-    if dividends is None or dividends.empty:
-        return pd.Series(dtype="float64")
-    sub = dividends[dividends["ticker"].astype(str).str.upper() == symbol.upper().strip()]
-    return pd.Series(sub["amount"].to_numpy(dtype="float64"), index=pd.to_datetime(sub["date"])).sort_index()
+    return _events_for(dividends, symbol, "amount")
 
 
 def dividends_by_year(paid: pd.Series) -> pd.DataFrame:
