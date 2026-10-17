@@ -173,10 +173,13 @@ _CSS = """
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-.wrap { max-width: 1040px; margin: 0 auto; padding: 40px 20px 72px; }
+/* Wide enough for every column on a 1280px laptop: at 1040px the table scrolled sideways there. */
+.wrap { max-width: 1280px; margin: 0 auto; padding: 40px 20px 72px; }
 h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
 .sub { color: var(--muted); margin: 0 0 2px; }
-.meta { color: var(--muted); font-size: 0.85rem; margin: 14px 0 22px; }
+.meta { color: var(--muted); font-size: 0.85rem; margin: 14px 0 14px; }
+.notice { font-size: 0.85rem; margin: 0 0 22px; padding: 10px 14px; border-radius: 8px;
+  border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--panel); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
@@ -213,6 +216,16 @@ details.models .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px
 .foot a, a { color: var(--accent); }
 .dl { display: inline-block; margin-top: 18px; font-size: 0.88rem; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
+/* On a phone the numbers still scroll sideways, but the ticker stays put beside them, and company names wrap
+   to two short lines rather than three. */
+@media (max-width: 700px) {
+  .wrap { padding: 28px 14px 56px; }
+  th, td { padding: 9px 9px; }
+  td.ticker, thead th:nth-child(2) { position: sticky; left: 0; z-index: 2; background: var(--panel);
+    box-shadow: 1px 0 0 var(--line); }
+  thead th:nth-child(2) { z-index: 3; }
+  td.company { min-width: 150px; font-size: 0.82rem; line-height: 1.35; }
+}
 """
 
 
@@ -246,6 +259,14 @@ def render_models_html() -> str:
     that can disagree for a reason. The spread between them is as much the output as the median is.</p>
 {chr(10).join(blocks)}
 </details>"""
+
+
+# Above the table, where it's read: the footer's caveats are a long scroll
+# past fifty rows, and a public page of "+180% upside" needs this up front.
+_NOTICE = """<p class="notice"><strong>Not investment advice.</strong> This is a
+screener's output, for research and learning: the numbers come straight from
+SEC filings and simple valuation models, and can be wrong or out of date. Do
+your own research before buying or selling anything.</p>"""
 
 
 _CAVEATS = """
@@ -346,6 +367,7 @@ def render_html(
   <h1>&#127919; Undervalued today</h1>
   <p class="sub">The widest gaps between blended intrinsic value and price across the US 10-K universe.</p>
   <p class="meta">{meta_line}</p>
+  {_NOTICE}
   {body}
   {models}
   <div class="foot">
