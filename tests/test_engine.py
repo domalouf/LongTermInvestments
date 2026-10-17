@@ -314,6 +314,17 @@ def test_every_model_is_documented_and_explained():
     with pytest.raises(KeyError):
         val.explain("not_a_model", row, a)
 
+    # the variables behind every equation, and the median that blends them
+    inputs = {sym: (value, src) for sym, _, value, src in val.explain_inputs(row, a, treasury_10y=0.04)}
+    assert inputs["EPS"][0] == "$3.05" and inputs["BVPS"][0] == "$12.40" and inputs["D₀"][0] == "$0.64"
+    assert inputs["r"] == ("9.0%", "the 10-year Treasury's 4.0% plus a 5.0% equity risk premium")
+    assert inputs["Y"][0] == "4.5%"
+    vals = sorted(row[m] for m in val.MODELS)
+    blend = val.explain_blend(row)
+    assert blend.startswith(f"median of {len(vals)} values (${vals[0]:,.2f}, ")
+    assert blend.endswith(f"= {row['fair_value_est_upside']:+.0%}")
+    assert val.explain_blend(loss) == "no model produced a value"
+
 
 def test_historical_cagr(fund):
     from lti import stock

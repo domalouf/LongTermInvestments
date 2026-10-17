@@ -86,7 +86,7 @@ Set these as `Environment=` lines in `~/.config/systemd/user/lti-undervalued.ser
 
 | Var | Default | |
 | --- | --- | --- |
-| `LTI_TOP_N` | `40` | rows published |
+| `LTI_TOP_N` | `20` | rows published |
 | `LTI_DEST` | `~/site/www/invest/` | rsync target |
 | `LTI_UNDERVALUED_ARGS` | — | extra `lti undervalued` flags, e.g. `--min-models 4 --market-cap-min 2000` |
 | `LTI_SKIP_PRICES` | — | `1` to skip the price refresh |

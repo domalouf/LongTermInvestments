@@ -557,7 +557,7 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
     ranked = rank_undervalued(load_fundamentals(), px, assumptions=assumptions, **screen)
 
     if args.out:
-        written = report.write_artifacts(ranked, args.out, asof=asof, params=params)
+        written = report.write_artifacts(ranked, args.out, asof=asof, params=params, assumptions=assumptions)
         for p in written:
             print("wrote", p)
 
@@ -566,7 +566,7 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
     elif args.format == "csv":
         print(report.render_csv(ranked), end="")
     elif args.format == "html":
-        print(report.render_html(ranked, asof=asof, params=params), end="")
+        print(report.render_html(ranked, asof=asof, params=params, assumptions=assumptions), end="")
     elif not args.out:  # text (default) — skip when --out already reported paths
         if ranked.empty:
             print(f"no names pass the filters as of {asof}")
@@ -815,7 +815,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     uv = sub.add_parser("undervalued", help="most undervalued names by blended intrinsic value")
     uv.add_argument("--asof", default=None, help="date (default today)")
-    uv.add_argument("--top", type=int, default=30)
+    uv.add_argument("--top", type=int, default=20)
     uv.add_argument("--market-cap-min", type=float, default=1000.0, help="floor ($M)")
     uv.add_argument("--min-models", type=int, default=3, help="valuation models that must produce a value")
     uv.add_argument(
