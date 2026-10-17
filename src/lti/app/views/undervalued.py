@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 import lti.config as config
-from lti import prices as prices_mod, stock as stock_mod
+from lti import prices as prices_mod, rates as rates_mod, stock as stock_mod
 from lti.app import theme, widgets
 from lti.history import HISTORY_YEARS
 from lti.valuation import (
@@ -19,8 +19,12 @@ from lti.valuation import (
     MODELS,
     ValuationAssumptions,
     explain,
+    explain_blend,
+    explain_inputs,
     rank_undervalued,
 )
+
+TOP_N = 20  # the list shows this many; the rest only count toward "names found"
 
 theme.header(
     "🎯 Undervalued today",
@@ -54,7 +58,7 @@ def _rank(key: str) -> pd.DataFrame:
         min_profit_years=p["min_profit_years"],
         min_roe=p["min_roe"],
         exclude_financials=p["exclude_financials"],
-        top_n=None,  # slice in the page so the sliders below don't re-run this
+        top_n=None,  # slice in the page: "names found" counts them all
     )
 
 
@@ -90,7 +94,6 @@ with st.sidebar:
         help="Positive EPS in the latest year as well as on the normalized basis. Off, the list "
              "admits companies valued on better years they may not get back.",
     )
-    top_n = st.slider("Show top N", 10, 100, 40)
 
     with st.expander("Valuation assumptions"):
         rate_kw = widgets.rates(asof)
@@ -123,7 +126,7 @@ if ranked_all.empty:
     st.warning("No names pass these filters. Loosen the market-cap floor or the consistency requirements.")
     st.stop()
 
-ranked = ranked_all.head(top_n).copy()
+ranked = ranked_all.head(TOP_N).copy()
 
 # --- headline ---------------------------------------------------------------
 
@@ -313,6 +316,8 @@ row = ranked[ranked["ticker"] == pick].iloc[0]
 cik = int(ranked.index[ranked["ticker"] == pick][0])
 price = float(row["price"])
 
+page_assumptions = ValuationAssumptions(**rate_kw, terminal_growth=term, growth_cap=gcap)
+
 left, right = st.columns(2)
 with left:
     st.subheader("Model values")
@@ -347,13 +352,13 @@ with left:
             yaxis_title="",
         )
         # the arithmetic behind each bar, at the sidebar's assumptions
-        page_assumptions = ValuationAssumptions(**rate_kw, terminal_growth=term, growth_cap=gcap)
         theme.note(
             "<br>".join(
                 f"<b>{MODEL_DOCS[m].label}</b> &nbsp;{explain(m, row, page_assumptions)}"
                 for m in MODELS
                 if m in row.index and pd.notna(row[m])
             )
+            + f"<br><b>Fair value</b> &nbsp;{explain_blend(row)}"
         )
 
 with right:
@@ -388,6 +393,17 @@ with right:
             f"Blue: the {HISTORY_YEARS} years in the norm (grey ones are older). EPS restated onto "
             "today's share count, as filed at the time."
         )
+
+st.subheader("The variables")
+treasury = rates_mod.rates_asof(rates_mod.load_rates(), asof)["treasury_10y"]
+st.dataframe(
+    pd.DataFrame(
+        explain_inputs(row, page_assumptions, treasury_10y=float(treasury) if pd.notna(treasury) else None),
+        columns=["Symbol", "Variable", "Value", "Where it comes from"],
+    ),
+    hide_index=True,
+    width="stretch",
+)
 
 d = st.columns(5)
 d[0].metric("Price", f"${price:,.2f}")

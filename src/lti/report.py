@@ -23,7 +23,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from lti.valuation import MODEL_DOCS, MODELS
+from lti.valuation import (
+    MODEL_DOCS,
+    MODELS,
+    ValuationAssumptions,
+    explain,
+    explain_blend,
+    explain_inputs,
+)
 
 # Columns lifted from a rank_undervalued() result into the published table, in
 # display order. Mirrors cmd_undervalued's console view; missing ones are skipped.
@@ -57,6 +64,19 @@ _COLUMN_LABELS: dict[str, str] = {
     "debt_to_equity": "D/E",
 }
 
+# Not in the table but in the JSON and CSV: each model's value and the inputs it
+# ran on, so a fair value can be checked against the numbers that produced it.
+DETAIL_COLUMNS: list[str] = [
+    *MODELS,
+    "n_models",
+    "eps_used",
+    "bvps_used",
+    "fcf_ps_used",
+    "dps_used",
+    "est_growth",
+    "ddm_growth_used",
+]
+
 # Right-aligned, monospaced numeric columns in the HTML table.
 _NUMERIC_COLUMNS = {
     "rank",
@@ -74,12 +94,14 @@ _NUMERIC_COLUMNS = {
 # --- shared shaping -------------------------------------------------------
 
 
-def build_view(ranked: pd.DataFrame) -> pd.DataFrame:
-    """The published columns of ``ranked``, index reset, values left raw.
+def build_view(ranked: pd.DataFrame, *, detail: bool = False) -> pd.DataFrame:
+    """The published columns of ``ranked``, index reset, values left raw —
+    with :data:`DETAIL_COLUMNS` after them when ``detail``.
 
     Formatting happens at render time so the JSON payload stays numeric.
     """
-    cols = [c for c in VIEW_COLUMNS if c in ranked.columns]
+    wanted = VIEW_COLUMNS + DETAIL_COLUMNS if detail else VIEW_COLUMNS
+    cols = [c for c in wanted if c in ranked.columns]
     return ranked.loc[:, cols].reset_index(drop=True).copy()
 
 
@@ -95,7 +117,7 @@ def build_payload(
     generated: str | None = None,
 ) -> dict:
     """A JSON-serializable dict: metadata + one record per row (NaN -> null)."""
-    view = build_view(ranked)
+    view = build_view(ranked, detail=True)
     rows = json.loads(view.to_json(orient="records")) if not view.empty else []
     return {
         "generated_utc": generated or _now_utc_iso(),
@@ -108,7 +130,7 @@ def build_payload(
 
 
 def render_csv(ranked: pd.DataFrame) -> str:
-    return build_view(ranked).to_csv(index=False)
+    return build_view(ranked, detail=True).to_csv(index=False)
 
 
 # --- HTML ---------------------------------------------------------------
@@ -211,6 +233,34 @@ details.models .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px
 .model dl { margin: 0; font-size: 0.83rem; color: var(--muted); }
 .model dt { font-weight: 600; color: var(--ink); float: left; clear: left; margin-right: 6px; }
 .model dd { margin: 0 0 4px; }
+td.ticker a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+section.whys { margin-top: 30px; }
+section.whys h2 { font-size: 1.15rem; margin: 0 0 4px; }
+section.whys .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px; max-width: 80ch; }
+details.why { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+  padding: 0 16px; margin-bottom: 8px; scroll-margin-top: 12px; }
+details.why > summary { cursor: pointer; padding: 11px 0; display: flex; flex-wrap: wrap;
+  align-items: baseline; gap: 4px 10px; }
+details.why[open] > summary { border-bottom: 1px solid var(--line); }
+details.why .rk { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.6em; }
+details.why .tk { font-weight: 600; }
+details.why .co { color: var(--muted); font-size: 0.88rem; flex: 1 1 12em; }
+details.why .fv { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
+details.why .fv b { color: var(--pos); margin-left: 6px; }
+.blend { font-size: 0.88rem; margin: 12px 0; padding: 8px 12px; border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.calcs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.calc { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+.calc h4 { margin: 0 0 6px; font-size: 0.88rem; }
+.calc code { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem; color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; }
+.calc .arith { margin: 0; font-size: 0.84rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.calc.silent { opacity: 0.55; }
+table.vars { margin: 14px 0 16px; font-size: 0.83rem; }
+table.vars th, table.vars td { padding: 6px 10px 6px 0; white-space: normal; }
+table.vars td.sym { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
+table.vars td.num { white-space: nowrap; }
+table.vars td.src { color: var(--muted); }
 .foot { color: var(--muted); font-size: 0.82rem; margin-top: 26px; }
 .foot ul { padding-left: 18px; margin: 8px 0; }
 .foot a, a { color: var(--accent); }
@@ -225,6 +275,10 @@ details.models .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px
     box-shadow: 1px 0 0 var(--line); }
   thead th:nth-child(2) { z-index: 3; }
   td.company { min-width: 150px; font-size: 0.82rem; line-height: 1.35; }
+  details.why { padding: 0 12px; }
+  .calcs { grid-template-columns: 1fr; }
+  table.vars thead { display: none; }
+  table.vars td.src { font-size: 0.78rem; }
 }
 """
 
@@ -259,6 +313,66 @@ def render_models_html() -> str:
     that can disagree for a reason. The spread between them is as much the output as the median is.</p>
 {chr(10).join(blocks)}
 </details>"""
+
+
+def _anchor(ticker) -> str:
+    return "why-" + "".join(ch if ch.isalnum() else "-" for ch in str(ticker))
+
+
+def render_breakdowns_html(
+    ranked: pd.DataFrame,
+    assumptions: ValuationAssumptions | None = None,
+    *,
+    treasury_10y: float | None = None,
+) -> str:
+    """One ``<details>`` per name: how its fair value was decided.
+
+    The median that made the fair value, each equation with the company's own
+    numbers in place of the symbols (:func:`lti.valuation.explain`), and every
+    variable those equations used with where it came from
+    (:func:`lti.valuation.explain_inputs`). Script-free, like the rest.
+    """
+    a = assumptions or ValuationAssumptions()
+    esc = html.escape
+    blocks: list[str] = []
+    for _, row in ranked.iterrows():
+        ticker, company = str(row.get("ticker", "")), str(row.get("company", ""))
+        models = []
+        for m in MODELS:
+            if m not in row.index:
+                continue
+            d = MODEL_DOCS[m]
+            silent = pd.isna(row[m])
+            models.append(
+                f'<div class="calc{" silent" if silent else ""}"><h4>{esc(d.label)}</h4>'
+                f"<code>{esc(d.formula)}</code>"
+                f'<p class="arith">{esc(explain(m, row, a))}</p></div>'
+            )
+        variables = "".join(
+            f'<tr><td class="sym">{esc(sym)}</td><td>{esc(name)}</td>'
+            f'<td class="num">{esc(val)}</td><td class="src">{esc(src)}</td></tr>'
+            for sym, name, val, src in explain_inputs(row, a, treasury_10y=treasury_10y)
+        )
+        price, fv, up = (_fmt_cell(c, row.get(c)) for c in ("price", "fair_value_est", "fair_value_est_upside"))
+        blocks.append(
+            f"""  <details class="why" id="{_anchor(ticker)}">
+    <summary><span class="rk">{_fmt_cell("rank", row.get("rank"))}</span>
+      <span class="tk">{esc(ticker)}</span> <span class="co">{esc(company)}</span>
+      <span class="fv">{price} &rarr; {fv} <b>{up}</b></span></summary>
+    <p class="blend"><strong>Fair value:</strong> {esc(explain_blend(row))}</p>
+    <div class="calcs">{"".join(models)}</div>
+    <table class="vars"><thead><tr><th>Symbol</th><th>Variable</th><th>Value</th><th>Where it comes from</th></tr></thead>
+      <tbody>{variables}</tbody></table>
+  </details>"""
+        )
+    return f"""<section class="whys">
+  <h2>How each fair value was decided</h2>
+  <p class="lede">Open a name to see the arithmetic: each of the {len(MODELS)} equations with that
+    company&rsquo;s own numbers in place of the symbols, the median that became its fair value, and
+    every variable the equations used, with where it came from. A greyed equation produced no value
+    and is left out of the median.</p>
+{chr(10).join(blocks)}
+</section>"""
 
 
 # Above the table, where it's read: the footer's caveats are a long scroll
@@ -302,8 +416,13 @@ def render_html(
     asof: str,
     params: dict | None = None,
     generated: str | None = None,
+    assumptions: ValuationAssumptions | None = None,
 ) -> str:
-    """A self-contained HTML page: no scripts, no external resources."""
+    """A self-contained HTML page: no scripts, no external resources.
+
+    ``assumptions`` are the ones ``ranked`` was valued at, for the per-name
+    breakdowns; without them, the defaults at ``params``' discount rate.
+    """
     view = build_view(ranked)
     generated = generated or _now_utc_iso()
     params = params or {}
@@ -335,7 +454,7 @@ def render_html(
                 elif c == "company":
                     cells.append(f'<td class="company">{text}</td>')
                 elif c == "ticker":
-                    cells.append(f'<td class="ticker">{text}</td>')
+                    cells.append(f'<td class="ticker"><a href="#{_anchor(val)}">{text}</a></td>')
                 elif c in _NUMERIC_COLUMNS:
                     cells.append(f'<td class="num">{text}</td>')
                 else:
@@ -352,6 +471,12 @@ def render_html(
     if summary:
         meta_line += f"<br>{summary}"
     models = render_models_html()
+    if assumptions is None:
+        known = {k: params[k] for k in ("discount_rate", "growth_cap", "bond_yield") if params.get(k)}
+        assumptions = ValuationAssumptions(**known)
+    whys = "" if view.empty else render_breakdowns_html(
+        ranked, assumptions, treasury_10y=params.get("treasury_10y")
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -369,6 +494,7 @@ def render_html(
   <p class="meta">{meta_line}</p>
   {_NOTICE}
   {body}
+  {whys}
   {models}
   <div class="foot">
     <strong>How this works</strong>
@@ -390,6 +516,7 @@ def write_artifacts(
     asof: str,
     params: dict | None = None,
     generated: str | None = None,
+    assumptions: ValuationAssumptions | None = None,
 ) -> list[Path]:
     """Write ``index.html``, ``undervalued.json`` and ``undervalued.csv`` into
     ``out_dir`` (created if needed). Returns the written paths.
@@ -405,7 +532,7 @@ def write_artifacts(
     csv_path = out / "undervalued.csv"
 
     html_path.write_text(
-        render_html(ranked, asof=asof, params=params, generated=generated),
+        render_html(ranked, asof=asof, params=params, generated=generated, assumptions=assumptions),
         encoding="utf-8",
     )
     json_path.write_text(

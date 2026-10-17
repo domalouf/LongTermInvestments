@@ -532,6 +532,75 @@ def explain(model: str, row: pd.Series, assumptions: ValuationAssumptions | None
     return f"{lhs} = {_money(value)}"
 
 
+def explain_inputs(
+    row: pd.Series,
+    assumptions: ValuationAssumptions | None = None,
+    *,
+    treasury_10y: float | None = None,
+) -> list[tuple[str, str, str, str]]:
+    """Every variable the six equations ran on for one company, as
+    ``(symbol, name, value, where it comes from)`` rows.
+
+    Company inputs are read from the ``*_used`` columns :func:`add_valuation_models`
+    records, so they are the numbers after every clip; the shared ones come from
+    ``assumptions``. ``treasury_10y``, when the discount rate was built from it,
+    lets the rate say so.
+    """
+    a = assumptions or ValuationAssumptions()
+
+    def get(col):
+        v = row.get(col)
+        return None if v is None or pd.isna(v) else float(v)
+
+    g, g_raw, g_ddm = get("est_growth"), get("revenue_cagr"), get("ddm_growth_used")
+    d_growth = get("dividend_growth_5y")
+    if g_raw is not None:
+        g_src = (f"the {_pct(g_raw)} a year revenue trend over the last five fiscal years, "
+                 f"clipped to [0, {_pct(a.growth_cap, 0)}]")
+    else:
+        g_src = f"the revenue trend, clipped to [0, {_pct(a.growth_cap, 0)}]"
+    if d_growth is not None:
+        g_ddm_src = f"the dividend's own {_pct(d_growth)} five-year growth, clipped to [0, g_term]"
+    else:
+        g_ddm_src = "g, clipped to [0, g_term] — no dividend history to grow it by"
+    if treasury_10y is not None:
+        r_src = (f"the 10-year Treasury's {_pct(treasury_10y)} plus a "
+                 f"{_pct(a.discount_rate - treasury_10y)} equity risk premium")
+    else:
+        r_src = "the required return on a stock (a fixed assumption)"
+
+    return [
+        ("P", "Price", _money(get("price")), "split-adjusted close on the as-of date"),
+        ("EPS", "Normalized EPS", _money(get("eps_used")),
+         "median EPS of the last five fiscal years, restated for splits since"),
+        ("BVPS", "Book value / share", _money(get("bvps_used")), "equity ÷ shares outstanding, latest 10-K"),
+        ("FCF", "Free cash flow / share", _money(get("fcf_ps_used")),
+         "median free cash flow of the last five years ÷ today's share count"),
+        ("D₀", "Dividend / share", _money(get("dps_used")) if get("dps_used") else "none",
+         "the last twelve months of dividends actually paid"),
+        ("y", "Dividend yield", _pct(get("dividend_yield")) if get("dps_used") else "—", "D₀ ÷ P"),
+        ("g", "Growth", _pct(g), g_src),
+        ("g_div", "Dividend growth", _pct(g_ddm) if get("dps_used") else "—", g_ddm_src),
+        ("r", "Discount rate", _pct(a.discount_rate), r_src),
+        ("g_term", "Terminal growth", _pct(a.terminal_growth), "perpetual growth after the DCF's explicit years"),
+        ("N", "DCF years", f"{a.dcf_years}", "years of explicit growth before the perpetuity"),
+        ("Y", "AAA bond yield", _pct(a.bond_yield), "Moody's AAA corporate yield, for Graham revised"),
+    ]
+
+
+def explain_blend(row: pd.Series) -> str:
+    """How the models' values became ``fair_value_est`` and its upside, in one
+    line: the median of the values that came out, then ÷ price − 1."""
+    vals = sorted(float(row[m]) for m in MODELS if m in row.index and pd.notna(row[m]))
+    if not vals:
+        return "no model produced a value"
+    fv, price = row.get("fair_value_est"), row.get("price")
+    line = f"median of {len(vals)} values ({', '.join(_money(v) for v in vals)}) = {_money(fv)}"
+    if pd.notna(fv) and price is not None and pd.notna(price) and price > 0:
+        line += f"; upside = {_money(fv)} ÷ {_money(price)} − 1 = {float(fv) / float(price) - 1:+.0%}"
+    return line
+
+
 # --- public API ------------------------------------------------------
 
 

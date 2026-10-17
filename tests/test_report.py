@@ -160,3 +160,29 @@ def test_write_artifacts_uses_shared_generated_timestamp(tmp_path, ranked):
     payload = json.loads((tmp_path / "undervalued.json").read_text())
     assert payload["generated_utc"] == "2026-09-05T12:00:00+00:00"
     assert "2026-09-05 12:00:00 UTC" in (tmp_path / "index.html").read_text()
+
+
+def test_render_html_breaks_down_each_fair_value(ranked):
+    """Each name gets its own arithmetic: the median, the equations with its numbers, the variables."""
+    r = ranked.assign(
+        eps_used=[2.0, 1.0], bvps_used=[10.0, 5.0], fcf_ps_used=[1.5, np.nan], dps_used=[0.42, np.nan],
+        est_growth=[0.06, 0.0], graham_number=[21.21, 10.61], epv_value=[22.22, 11.11],
+        lynch_fair_value=[20.4, 0.0], graham_intrinsic=[np.nan, np.nan], dcf_value=[30.0, np.nan],
+        ddm_value=[np.nan, np.nan],
+    )
+    page = report.render_html(r, asof="2026-09-05", params={"discount_rate": 0.09})
+    assert page.count('<details class="why"') == 2
+    assert 'href="#why-AAA"' in page and 'id="why-AAA"' in page  # the ticker links to its breakdown
+    assert "√(22.5 × EPS $2.00 × BVPS $10.00) = $21.21" in page
+    assert "EPS $2.00 / 9.0% = $22.22" in page
+    assert "median of 4 values ($20.40, $21.21, $22.22, $30.00) = $25.00" in page
+    assert "Normalized EPS" in page and "Where it comes from" in page
+    assert page.index("How each fair value was decided") > page.index("<table")
+
+
+def test_csv_and_json_carry_the_model_values_and_inputs(ranked):
+    r = ranked.assign(epv_value=[22.0, 11.0], eps_used=[2.0, 1.0])
+    header = report.render_csv(r).splitlines()[0].split(",")
+    assert "epv_value" in header and "eps_used" in header
+    assert "epv_value" in report.build_payload(r, asof="2026-09-05")["columns"]
+    assert "epv_value" not in report.build_view(r).columns  # the table itself stays as it was
