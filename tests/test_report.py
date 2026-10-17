@@ -125,6 +125,13 @@ def test_render_html_is_self_contained_and_escaped(ranked):
     assert "+6%" in doc and "90%" in doc  # revenue growth, cash conversion
 
 
+def test_render_html_says_not_advice_before_the_table(ranked, empty):
+    doc = report.render_html(ranked, asof="2026-09-05")
+    assert '<p class="notice"><strong>Not investment advice.</strong>' in doc
+    assert doc.index('class="notice"') < doc.index("<table")
+    assert 'class="notice"' in report.render_html(empty, asof="2026-09-05")
+
+
 def test_render_html_empty_has_message(empty):
     doc = report.render_html(empty, asof="2026-09-05")
     assert "No names pass the filters for 2026-09-05" in doc
