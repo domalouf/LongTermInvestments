@@ -59,7 +59,7 @@ def world():
     # each at its level on the as-of date the list tests use, trending at its own rate
     idx = pd.bdate_range("2013-01-01", "2025-12-31")
     years = (idx - pd.Timestamp(ASOF)).days / 365.25
-    level = {"STDY": (10.0, 0.10), "PEAK": (15.0, 0.02), "ONCE": (10.0, -0.05), "SLIP": (12.0, 0.05), "SPY": (100.0, 0.07)}
+    level = {"STDY": (10.0, 0.10), "PEAK": (20.0, 0.02), "ONCE": (10.0, -0.05), "SLIP": (12.0, 0.05), "SPY": (100.0, 0.07)}  # PEAK: its peak-year mean stays under MAX_UPSIDE
     panel = pd.DataFrame({t: p * np.exp(mu * years) for t, (p, mu) in level.items()}, index=idx)
     return fund, PriceData(adj=panel, close=panel, splits=empty_splits())
 

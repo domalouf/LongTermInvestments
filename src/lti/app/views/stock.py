@@ -450,8 +450,8 @@ with fv_tab:
                 shown = [m for m in MODELS if m in v.columns]
                 widgets.model_notes(shown, {m: explain(m, row, assumptions) for m in shown}, symbol)
                 st.markdown(
-                    f"**Blended** — the median of the {len(present)} models that produced a number "
-                    f"for {symbol}. A median so one model's extreme can't set the answer — but four of "
+                    f"**Blended** — the mean of the {len(present)} models that produced a number "
+                    f"for {symbol}. Each counts equally, so one model's extreme moves it — and four of "
                     "the six multiply the same EPS, so their agreement mostly restates that one number. "
                     "The DCF (cash flow) and the dividend discount (cash actually paid out) are the two "
                     "carrying separate evidence; the spread between all of them is the real output."

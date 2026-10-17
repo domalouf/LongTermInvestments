@@ -596,7 +596,7 @@ def cmd_explain_models(args: argparse.Namespace) -> None:
         print(textwrap.fill(body, width=width, initial_indent=indent,
                             subsequent_indent=indent + " " * (len(label) + 1 if label else 0)))
 
-    print(f"\nSix equations. Each fair value is the median of the ones that produced a number "
+    print(f"\nSix equations. Each fair value is the mean of the ones that produced a number "
           f"({MIN_MODELS} minimum).")
     para(f"Defaults: discount rate {a.discount_rate:.1%} · terminal growth {a.terminal_growth:.1%} · "
          f"DCF window {a.dcf_years}y · growth capped at {a.growth_cap:.0%} · AAA yield {a.bond_yield:.1%}",

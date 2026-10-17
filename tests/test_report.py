@@ -49,9 +49,9 @@ def test_build_view_drops_missing_and_resets_index(ranked):
 
 def test_dividend_yield_renders_as_a_percent_and_a_non_payer_as_a_dash(ranked):
     html = report.render_html(ranked, asof="2026-09-05", params={})
-    assert "<th>Dividend yield</th>" in html
-    assert '<td class="num">4.2%</td>' in html
-    assert '<td class="num">0.0%</td>' not in html  # BBB pays nothing, so it gets a dash
+    assert '<span class="dividend-yield num">Dividend yield</span>' in html
+    assert '<span class="dividend-yield num">4.2%</span>' in html
+    assert ">0.0%<" not in html  # BBB pays nothing, so it gets a dash
 
 
 def test_html_explains_every_model(ranked):
@@ -128,14 +128,14 @@ def test_render_html_is_self_contained_and_escaped(ranked):
 def test_render_html_says_not_advice_before_the_table(ranked, empty):
     doc = report.render_html(ranked, asof="2026-09-05")
     assert '<p class="notice"><strong>Not investment advice.</strong>' in doc
-    assert doc.index('class="notice"') < doc.index("<table")
+    assert doc.index('class="notice"') < doc.index('class="list"')
     assert 'class="notice"' in report.render_html(empty, asof="2026-09-05")
 
 
 def test_render_html_empty_has_message(empty):
     doc = report.render_html(empty, asof="2026-09-05")
     assert "No names pass the filters for 2026-09-05" in doc
-    assert "<table" not in doc
+    assert 'class="list"' not in doc and "<details class=\"row\"" not in doc
 
 
 def test_write_artifacts_writes_all_three(tmp_path, ranked):
@@ -162,22 +162,31 @@ def test_write_artifacts_uses_shared_generated_timestamp(tmp_path, ranked):
     assert "2026-09-05 12:00:00 UTC" in (tmp_path / "index.html").read_text()
 
 
-def test_render_html_breaks_down_each_fair_value(ranked):
-    """Each name gets its own arithmetic: the median, the equations with its numbers, the variables."""
+def test_each_row_opens_to_how_its_fair_value_was_decided(ranked):
+    """The rows are the breakdowns: each name's row opens in place to its arithmetic — the mean,
+    the equations with its numbers, the variables — with no second list repeating the names."""
     r = ranked.assign(
+        fair_value_est=[23.46, 10.86],
         eps_used=[2.0, 1.0], bvps_used=[10.0, 5.0], fcf_ps_used=[1.5, np.nan], dps_used=[0.42, np.nan],
         est_growth=[0.06, 0.0], graham_number=[21.21, 10.61], epv_value=[22.22, 11.11],
         lynch_fair_value=[20.4, 0.0], graham_intrinsic=[np.nan, np.nan], dcf_value=[30.0, np.nan],
         ddm_value=[np.nan, np.nan],
     )
     page = report.render_html(r, asof="2026-09-05", params={"discount_rate": 0.09})
-    assert page.count('<details class="why"') == 2
-    assert 'href="#why-AAA"' in page and 'id="why-AAA"' in page  # the ticker links to its breakdown
-    assert "√(22.5 × EPS $2.00 × BVPS $10.00) = $21.21" in page
-    assert "EPS $2.00 / 9.0% = $22.22" in page
-    assert "median of 4 values ($20.40, $21.21, $22.22, $30.00) = $25.00" in page
-    assert "Normalized EPS" in page and "Where it comes from" in page
-    assert page.index("How each fair value was decided") > page.index("<table")
+    assert page.count('<details class="row"') == 2
+    assert page.count("Alpha Inc") == 1  # one row per name, not a row plus a repeat below
+    # the row is the <summary>, so clicking anywhere on it opens it; deep links still land on it
+    aaa = page[page.index('<details class="row" id="why-AAA">'):page.index('id="why-BBB"')]
+    summary = aaa[aaa.index("<summary"):aaa.index("</summary>")]
+    assert "AAA" in summary and "Alpha Inc" in summary and "+150%" in summary
+    assert "<a " not in summary  # nothing clickable inside the row competes with opening it
+    why = aaa[aaa.index("</summary>"):]
+    assert "√(22.5 × EPS $2.00 × BVPS $10.00) = $21.21" in why
+    assert "EPS $2.00 / 9.0% = $22.22" in why
+    assert "mean of 4 values: ($20.40 + $21.21 + $22.22 + $30.00) ÷ 4 = $23.46" in why
+    assert "Normalized EPS" in why and "Where it comes from" in why
+    assert "How each fair value was decided" not in page
+    assert "<script" not in page.lower()
 
 
 def test_csv_and_json_carry_the_model_values_and_inputs(ranked):

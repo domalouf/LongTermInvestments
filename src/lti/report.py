@@ -10,7 +10,9 @@ Nothing here touches the network or SEC data: the input is a finished
 
 The page carries the six equations as well as the ranked names — rendered from
 :data:`lti.valuation.MODEL_DOCS`, so the published explanation and the code that
-does the arithmetic can't drift apart.
+does the arithmetic can't drift apart. Each row of the list opens in place to
+show how that name's fair value was decided: a ``<details>`` whose summary is
+the row itself, so the page stays script-free.
 """
 
 from __future__ import annotations
@@ -63,6 +65,30 @@ _COLUMN_LABELS: dict[str, str] = {
     "fcf_conversion": "Cash conversion",
     "debt_to_equity": "D/E",
 }
+
+# Each column's track in the list's grid, shared by the header and every row so
+# they line up like a table. The company takes what's left.
+_COLUMN_TRACKS: dict[str, str] = {
+    "rank": "3.2em",
+    "ticker": "5.6em",
+    "company": "minmax(12em, 1fr)",
+    "price": "6.6em",
+    "fair_value_est": "6.8em",
+    "fair_value_est_upside": "6.8em",
+    "pe_norm": "5.4em",
+    "dividend_yield": "6em",
+    "profit_years": "6.2em",
+    "revenue_cagr": "6.4em",
+    "fcf_conversion": "6.8em",
+    "debt_to_equity": "4.6em",
+}
+
+
+def _tracks_width(tracks: list[str]) -> float:
+    """The narrowest the grid can be, in em: every track at its minimum. The
+    list is held at least this wide, so where the view is narrower the rows
+    scroll sideways whole rather than overflowing their own backgrounds."""
+    return sum(float(t.removeprefix("minmax(").split(",")[0].removesuffix("em")) for t in tracks)
 
 # Not in the table but in the JSON and CSV: each model's value and the inputs it
 # ran on, so a fair value can be checked against the numbers that produced it.
@@ -203,21 +229,43 @@ h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
 .notice { font-size: 0.85rem; margin: 0 0 22px; padding: 10px 14px; border-radius: 8px;
   border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--panel); }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.scroll { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
-thead th { position: sticky; top: 0; background: var(--panel); font-weight: 600;
-  color: var(--muted); text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.04em; }
-tbody tr:last-child td { border-bottom: 0; }
-tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
-td.num { text-align: right; font-variant-numeric: tabular-nums;
+/* A container, so an opened row's breakdown can be exactly as wide as what's in view (100cqw)
+   while the columns scroll sideways beneath it on a phone. */
+.scroll { overflow-x: auto; container-type: inline-size; }
+.hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 10px; }
+/* The list: a header and one <details> per name, each laid on the same grid tracks so the
+   columns line up like a table's. The <summary> is the row, so the whole row opens it. */
+.list { font-size: 0.9rem; }
+.cells { display: grid; grid-template-columns: var(--tracks); align-items: center; }
+.cells > span { padding: 10px 12px; white-space: nowrap; min-width: 0; }
+.head { border-bottom: 1px solid var(--line); align-items: end; }
+.head > span { font-weight: 600; color: var(--muted); text-transform: uppercase; font-size: 0.72rem;
+  letter-spacing: 0.04em; white-space: normal; line-height: 1.3; }
+.head > span.num { text-align: right; }
+details.row { border-bottom: 1px solid var(--line); scroll-margin-top: 12px; }
+details.row:last-child { border-bottom: 0; }
+details.row > summary { list-style: none; cursor: pointer; }
+details.row > summary::-webkit-details-marker { display: none; }
+details.row > summary:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+details.row > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+details.row[open] > summary { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cells > .num { text-align: right; font-variant-numeric: tabular-nums;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-td.company { white-space: normal; min-width: 180px; }
-td.ticker { font-weight: 600; }
-td.upside { position: relative; }
-td.upside .val { position: relative; z-index: 1; color: var(--pos); font-weight: 600; }
-td.upside::before { content: ""; position: absolute; inset: 4px auto 4px 0;
+/* the disclosure arrow rides in the rank cell, turning down when the row is open */
+summary.cells > .rank { display: flex; justify-content: space-between; gap: 4px; }
+summary.cells > .rank::before { content: "\\25B8"; color: var(--muted); font-family: -apple-system, BlinkMacSystemFont,
+  "Segoe UI", Roboto, Helvetica, Arial, sans-serif; transition: transform 0.15s; }
+details.row[open] .cells > .rank::before { transform: rotate(90deg); color: var(--accent); }
+.cells > .company { white-space: normal; line-height: 1.35; }
+.cells > .ticker { font-weight: 600; }
+.cells > .upside { position: relative; align-self: stretch; display: flex; align-items: center;
+  justify-content: flex-end; }
+.cells > .upside .val { position: relative; z-index: 1; color: var(--pos); font-weight: 600; }
+.cells > .upside::before { content: ""; position: absolute; inset: 6px auto 6px 0;
   width: var(--w, 0%); background: var(--bar); border-radius: 3px; }
+/* An opened row's arithmetic. Sticky at the left, as wide as the view, so on a phone it stays
+   put and readable however far the columns above it are scrolled. */
+.why { position: sticky; left: 0; width: 100cqw; padding: 2px 16px 16px; }
 details.models { margin-top: 26px; border: 1px solid var(--line); border-radius: 12px;
   background: var(--panel); padding: 0 16px; }
 details.models > summary { cursor: pointer; padding: 14px 0; font-weight: 600; }
@@ -233,20 +281,6 @@ details.models .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px
 .model dl { margin: 0; font-size: 0.83rem; color: var(--muted); }
 .model dt { font-weight: 600; color: var(--ink); float: left; clear: left; margin-right: 6px; }
 .model dd { margin: 0 0 4px; }
-td.ticker a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
-section.whys { margin-top: 30px; }
-section.whys h2 { font-size: 1.15rem; margin: 0 0 4px; }
-section.whys .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px; max-width: 80ch; }
-details.why { border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
-  padding: 0 16px; margin-bottom: 8px; scroll-margin-top: 12px; }
-details.why > summary { cursor: pointer; padding: 11px 0; display: flex; flex-wrap: wrap;
-  align-items: baseline; gap: 4px 10px; }
-details.why[open] > summary { border-bottom: 1px solid var(--line); }
-details.why .rk { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 1.6em; }
-details.why .tk { font-weight: 600; }
-details.why .co { color: var(--muted); font-size: 0.88rem; flex: 1 1 12em; }
-details.why .fv { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }
-details.why .fv b { color: var(--pos); margin-left: 6px; }
 .blend { font-size: 0.88rem; margin: 12px 0; padding: 8px 12px; border-radius: 6px;
   background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .calcs { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
@@ -256,7 +290,11 @@ details.why .fv b { color: var(--pos); margin-left: 6px; }
   font-size: 0.76rem; color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; }
 .calc .arith { margin: 0; font-size: 0.84rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .calc.silent { opacity: 0.55; }
-table.vars { margin: 14px 0 16px; font-size: 0.83rem; }
+table.vars { width: 100%; border-collapse: collapse; margin: 14px 0 0; font-size: 0.83rem; }
+table.vars th { text-align: left; font-weight: 600; color: var(--muted); text-transform: uppercase;
+  font-size: 0.7rem; letter-spacing: 0.04em; border-bottom: 1px solid var(--line); }
+table.vars td { border-bottom: 1px solid var(--line); }
+table.vars tr:last-child td { border-bottom: 0; }
 table.vars th, table.vars td { padding: 6px 10px 6px 0; white-space: normal; }
 table.vars td.sym { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-weight: 600; }
 table.vars td.num { white-space: nowrap; }
@@ -270,12 +308,13 @@ table.vars td.src { color: var(--muted); }
    to two short lines rather than three. */
 @media (max-width: 700px) {
   .wrap { padding: 28px 14px 56px; }
-  th, td { padding: 9px 9px; }
-  td.ticker, thead th:nth-child(2) { position: sticky; left: 0; z-index: 2; background: var(--panel);
-    box-shadow: 1px 0 0 var(--line); }
-  thead th:nth-child(2) { z-index: 3; }
-  td.company { min-width: 150px; font-size: 0.82rem; line-height: 1.35; }
-  details.why { padding: 0 12px; }
+  .cells > span { padding: 9px 9px; }
+  .cells > .ticker { position: sticky; left: 0; z-index: 2; background: var(--panel);
+    box-shadow: 1px 0 0 var(--line); align-self: stretch; display: flex; align-items: center; }
+  .head > .ticker { align-items: flex-end; }
+  details.row[open] .cells > .ticker { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+  .cells > .company { font-size: 0.82rem; }
+  .why { padding: 2px 12px 14px; }
   .calcs { grid-template-columns: 1fr; }
   table.vars thead { display: none; }
   table.vars td.src { font-size: 0.78rem; }
@@ -306,11 +345,11 @@ def render_models_html() -> str:
         )
     return f"""<details class="models">
   <summary>What each of the {len(MODELS)} equations does &mdash; and what it assumes</summary>
-  <p class="lede">Every fair value above is the median of these six, run on normalized earnings.
+  <p class="lede">Every fair value above is the mean of these six, run on normalized earnings.
     They are not six independent opinions: Lynch, both Grahams and earnings power all multiply
     the same EPS, so they mostly restate that one number at different multiples. The DCF runs on
     cash flow and the dividend discount on cash actually paid out &mdash; those two are the ones
-    that can disagree for a reason. The spread between them is as much the output as the median is.</p>
+    that can disagree for a reason. The spread between them is as much the output as the average is.</p>
 {chr(10).join(blocks)}
 </details>"""
 
@@ -319,60 +358,43 @@ def _anchor(ticker) -> str:
     return "why-" + "".join(ch if ch.isalnum() else "-" for ch in str(ticker))
 
 
-def render_breakdowns_html(
-    ranked: pd.DataFrame,
+def render_breakdown_html(
+    row: pd.Series,
     assumptions: ValuationAssumptions | None = None,
     *,
     treasury_10y: float | None = None,
 ) -> str:
-    """One ``<details>`` per name: how its fair value was decided.
+    """How one name's fair value was decided — what its row opens to.
 
-    The median that made the fair value, each equation with the company's own
+    The mean that made the fair value, each equation with the company's own
     numbers in place of the symbols (:func:`lti.valuation.explain`), and every
     variable those equations used with where it came from
     (:func:`lti.valuation.explain_inputs`). Script-free, like the rest.
     """
     a = assumptions or ValuationAssumptions()
     esc = html.escape
-    blocks: list[str] = []
-    for _, row in ranked.iterrows():
-        ticker, company = str(row.get("ticker", "")), str(row.get("company", ""))
-        models = []
-        for m in MODELS:
-            if m not in row.index:
-                continue
-            d = MODEL_DOCS[m]
-            silent = pd.isna(row[m])
-            models.append(
-                f'<div class="calc{" silent" if silent else ""}"><h4>{esc(d.label)}</h4>'
-                f"<code>{esc(d.formula)}</code>"
-                f'<p class="arith">{esc(explain(m, row, a))}</p></div>'
-            )
-        variables = "".join(
-            f'<tr><td class="sym">{esc(sym)}</td><td>{esc(name)}</td>'
-            f'<td class="num">{esc(val)}</td><td class="src">{esc(src)}</td></tr>'
-            for sym, name, val, src in explain_inputs(row, a, treasury_10y=treasury_10y)
+    models = []
+    for m in MODELS:
+        if m not in row.index:
+            continue
+        d = MODEL_DOCS[m]
+        silent = pd.isna(row[m])
+        models.append(
+            f'<div class="calc{" silent" if silent else ""}"><h4>{esc(d.label)}</h4>'
+            f"<code>{esc(d.formula)}</code>"
+            f'<p class="arith">{esc(explain(m, row, a))}</p></div>'
         )
-        price, fv, up = (_fmt_cell(c, row.get(c)) for c in ("price", "fair_value_est", "fair_value_est_upside"))
-        blocks.append(
-            f"""  <details class="why" id="{_anchor(ticker)}">
-    <summary><span class="rk">{_fmt_cell("rank", row.get("rank"))}</span>
-      <span class="tk">{esc(ticker)}</span> <span class="co">{esc(company)}</span>
-      <span class="fv">{price} &rarr; {fv} <b>{up}</b></span></summary>
-    <p class="blend"><strong>Fair value:</strong> {esc(explain_blend(row))}</p>
-    <div class="calcs">{"".join(models)}</div>
-    <table class="vars"><thead><tr><th>Symbol</th><th>Variable</th><th>Value</th><th>Where it comes from</th></tr></thead>
-      <tbody>{variables}</tbody></table>
-  </details>"""
-        )
-    return f"""<section class="whys">
-  <h2>How each fair value was decided</h2>
-  <p class="lede">Open a name to see the arithmetic: each of the {len(MODELS)} equations with that
-    company&rsquo;s own numbers in place of the symbols, the median that became its fair value, and
-    every variable the equations used, with where it came from. A greyed equation produced no value
-    and is left out of the median.</p>
-{chr(10).join(blocks)}
-</section>"""
+    variables = "".join(
+        f'<tr><td class="sym">{esc(sym)}</td><td>{esc(name)}</td>'
+        f'<td class="num">{esc(val)}</td><td class="src">{esc(src)}</td></tr>'
+        for sym, name, val, src in explain_inputs(row, a, treasury_10y=treasury_10y)
+    )
+    return f"""<div class="why">
+      <p class="blend"><strong>Fair value:</strong> {esc(explain_blend(row))}</p>
+      <div class="calcs">{"".join(models)}</div>
+      <table class="vars"><thead><tr><th>Symbol</th><th>Variable</th><th>Value</th><th>Where it comes from</th></tr></thead>
+        <tbody>{variables}</tbody></table>
+    </div>"""
 
 
 # Above the table, where it's read: the footer's caveats are a long scroll
@@ -389,7 +411,7 @@ _CAVEATS = """
       the as-of date, one row each, with a ticker, positive revenue and above the
       market-cap floor; commodity and crypto trusts are left out. Each filing&rsquo;s
       per-share figures are restated for any stock split since it was filed.</li>
-  <li><strong>Fair value</strong> is the median of the DCF, Lynch, Graham (&times;2),
+  <li><strong>Fair value</strong> is the mean of the DCF, Lynch, Graham (&times;2),
       DDM and EPV models that produced a number (each equation is spelled out
       above), run on <em>normalized</em>
       earnings &mdash; the median of the last five years&rsquo; EPS and free cash
@@ -420,7 +442,8 @@ def render_html(
 ) -> str:
     """A self-contained HTML page: no scripts, no external resources.
 
-    ``assumptions`` are the ones ``ranked`` was valued at, for the per-name
+    Every row opens in place to its breakdown (:func:`render_breakdown_html`).
+    ``assumptions`` are the ones ``ranked`` was valued at, for those
     breakdowns; without them, the defaults at ``params``' discount rate.
     """
     view = build_view(ranked)
@@ -439,44 +462,50 @@ def render_html(
             ups = view["fair_value_est_upside"].dropna()
             ceiling = float(ups.max()) if not ups.empty else 0.0
 
+        if assumptions is None:
+            known = {k: params[k] for k in ("discount_rate", "growth_cap", "bond_yield") if params.get(k)}
+            assumptions = ValuationAssumptions(**known)
+        treasury_10y = params.get("treasury_10y")
+
+        def cls(c: str) -> str:
+            return " ".join(x for x in (c.replace("_", "-"), "num" if c in _NUMERIC_COLUMNS else "") if x)
+
+        tracks = [_COLUMN_TRACKS.get(c, "6em") for c in view.columns]
         head = "".join(
-            f"<th>{html.escape(_COLUMN_LABELS.get(c, c))}</th>" for c in view.columns
+            f'<span class="{cls(c)}">{html.escape(_COLUMN_LABELS.get(c, c))}</span>' for c in view.columns
         )
-        body_rows: list[str] = []
-        for rec in view.to_dict("records"):
+        rows: list[str] = []
+        for i, rec in enumerate(view.to_dict("records")):
             cells: list[str] = []
             for c in view.columns:
                 val = rec[c]
                 text = _fmt_cell(c, val)
                 if c == "fair_value_est_upside":
                     w = _upside_bar_pct(val, ceiling)
-                    cells.append(f'<td class="num upside" style="--w:{w:.1f}%"><span class="val">{text}</span></td>')
-                elif c == "company":
-                    cells.append(f'<td class="company">{text}</td>')
-                elif c == "ticker":
-                    cells.append(f'<td class="ticker"><a href="#{_anchor(val)}">{text}</a></td>')
-                elif c in _NUMERIC_COLUMNS:
-                    cells.append(f'<td class="num">{text}</td>')
+                    cells.append(f'<span class="num upside" style="--w:{w:.1f}%"><span class="val">{text}</span></span>')
                 else:
-                    cells.append(f"<td>{text}</td>")
-            body_rows.append(f"<tr>{''.join(cells)}</tr>")
+                    cells.append(f'<span class="{cls(c)}">{text}</span>')
+            why = render_breakdown_html(ranked.iloc[i], assumptions, treasury_10y=treasury_10y)
+            anchor = f' id="{_anchor(rec["ticker"])}"' if "ticker" in rec else ""
+            rows.append(
+                f'<details class="row"{anchor}><summary class="cells">{"".join(cells)}</summary>\n'
+                f"    {why}\n  </details>"
+            )
         body = (
-            '<div class="card"><div class="scroll"><table>'
-            f"<thead><tr>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody>"
-            "</table></div></div>"
-            '<a class="dl" href="undervalued.csv">Download CSV</a>'
+            f"<style>.list {{ --tracks: {' '.join(tracks)}; min-width: {_tracks_width(tracks):g}em; }}</style>\n"
+            '  <p class="hint">Click any row to see how its fair value was decided: each equation with the '
+            "company&rsquo;s own numbers, the average that became its fair value, and where every input came from.</p>\n"
+            '  <div class="card"><div class="scroll"><div class="list">\n'
+            f'  <div class="cells head" aria-hidden="true">{head}</div>\n  '
+            + "\n  ".join(rows)
+            + "\n  </div></div></div>\n"
+            '  <a class="dl" href="undervalued.csv">Download CSV</a>'
         )
 
     meta_line = f"As of <strong>{asof_disp}</strong> &middot; generated {gen_disp}"
     if summary:
         meta_line += f"<br>{summary}"
     models = render_models_html()
-    if assumptions is None:
-        known = {k: params[k] for k in ("discount_rate", "growth_cap", "bond_yield") if params.get(k)}
-        assumptions = ValuationAssumptions(**known)
-    whys = "" if view.empty else render_breakdowns_html(
-        ranked, assumptions, treasury_10y=params.get("treasury_10y")
-    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -494,7 +523,6 @@ def render_html(
   <p class="meta">{meta_line}</p>
   {_NOTICE}
   {body}
-  {whys}
   {models}
   <div class="foot">
     <strong>How this works</strong>
