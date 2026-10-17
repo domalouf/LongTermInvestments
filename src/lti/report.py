@@ -173,7 +173,8 @@ _CSS = """
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-.wrap { max-width: 1040px; margin: 0 auto; padding: 40px 20px 72px; }
+/* Wide enough for every column on a 1280px laptop: at 1040px the table scrolled sideways there. */
+.wrap { max-width: 1280px; margin: 0 auto; padding: 40px 20px 72px; }
 h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
 .sub { color: var(--muted); margin: 0 0 2px; }
 .meta { color: var(--muted); font-size: 0.85rem; margin: 14px 0 14px; }
@@ -215,6 +216,16 @@ details.models .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 14px
 .foot a, a { color: var(--accent); }
 .dl { display: inline-block; margin-top: 18px; font-size: 0.88rem; }
 .empty { padding: 40px 16px; text-align: center; color: var(--muted); }
+/* On a phone the numbers still scroll sideways, but the ticker stays put beside them, and company names wrap
+   to two short lines rather than three. */
+@media (max-width: 700px) {
+  .wrap { padding: 28px 14px 56px; }
+  th, td { padding: 9px 9px; }
+  td.ticker, thead th:nth-child(2) { position: sticky; left: 0; z-index: 2; background: var(--panel);
+    box-shadow: 1px 0 0 var(--line); }
+  thead th:nth-child(2) { z-index: 3; }
+  td.company { min-width: 150px; font-size: 0.82rem; line-height: 1.35; }
+}
 """
 
 
