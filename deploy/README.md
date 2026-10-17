@@ -48,6 +48,30 @@ deployed with that repo's `deploy/deploy.sh`.
 
 ### One-time setup — the job
 
+The server is `ssh lts` (Debian 13, x86_64). From a bare install it also needs
+`git rsync curl` from apt and **Python 3.12** — trixie's system Python is 3.13 and
+`python3.12` isn't packaged, so install it with mise, which fetches a precompiled
+build and needs no compiler (that box has no gcc):
+
+```bash
+curl https://mise.run | sh && mise use -g python@3.12
+git clone https://github.com/domalouf/LongTermInvestments.git ~/Projects/LongTermInvestments
+#   the repo is public, so over HTTPS the server needs no key of its own to pull
+cd ~/Projects/LongTermInvestments
+"$(mise which python --tool=python@3.12)" -m venv venv && source venv/bin/activate
+pip install -U pip && pip install -r requirements.txt && pip install -e ".[dev]"
+```
+
+Copy the data over rather than rebuilding it — `lti update` is a multi-hour pipeline:
+
+```bash
+# from the machine that already has it:
+rsync -a data/derived data/prices data/track lts:Projects/LongTermInvestments/data/
+rsync -a data/sec lts:Projects/LongTermInvestments/data/   # 12 GB, quarterly rebuilds only
+```
+
+Then:
+
 ```bash
 cd ~/Projects/LongTermInvestments
 git pull && pip install -e .            # picks up refresh-prices + the renderer
