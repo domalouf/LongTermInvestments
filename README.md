@@ -36,6 +36,9 @@ Run the unit tests (pure logic, no network or SEC data needed):
 pytest -q
 ```
 
+GitHub Actions runs the same suite on every push to `main` and every pull request
+(`.github/workflows/tests.yml`).
+
 Configuration for `secfsdstools` is generated automatically: importing `lti` renders
 `.secfsdstools.cfg` from `.secfsdstools.cfg.template` (absolute `data/` paths, your SEC
 `User-Agent` email) and points `SECFSDSTOOLS_CFG` at it. Override the email with
@@ -94,6 +97,7 @@ lti track-record                 # write down what each tracked strategy holds t
 lti track-report                 # how the records have done since
 lti journal-add AAPL buy --thesis "why" --change-my-mind "what would prove it wrong"
 lti journal                      # every logged decision and how it has aged
+lti health                       # is the data current? exits 1 if a nightly or weekly step went stale
 lti portfolio-add deposit --amount 10000          # your own account (see "Portfolio" below)
 lti portfolio-add buy VTI --shares 20             # at that day's close unless --price
 lti portfolio                    # holdings, returns, and the same money in SPY

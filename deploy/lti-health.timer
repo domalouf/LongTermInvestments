@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily health check of the lti jobs and data
+
+[Timer]
+# A few hours after the nightly publish (07:30 UTC), so a late run has finished.
+OnCalendar=*-*-* 11:00:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,7 @@
+[Unit]
+Description=Alert: %i failed
+
+[Service]
+Type=oneshot
+# Named by OnFailure= in the job units; %i is the unit that failed.
+ExecStart=%h/Projects/LongTermInvestments/deploy/alert.sh "%i failed on %H" "journalctl --user -u %i -n 50"

@@ -3,6 +3,8 @@ Description=Publish the daily "undervalued today" snapshot to domalouf.com
 Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
 After=network-online.target
 Wants=network-online.target
+# a failed run says so: deploy/alert.sh, via lti-alert@.service
+OnFailure=lti-alert@%n.service
 
 [Service]
 Type=oneshot

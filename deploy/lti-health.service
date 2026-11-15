@@ -1,0 +1,9 @@
+[Unit]
+Description=Check that the lti jobs ran and their data is current
+Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
+
+[Service]
+Type=oneshot
+# Exits 1 after alerting, so `systemctl --user status lti-health` shows the state too.
+ExecStart=%h/Projects/LongTermInvestments/deploy/check-health.sh
+Nice=10
