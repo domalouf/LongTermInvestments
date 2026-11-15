@@ -4,7 +4,7 @@ secfsdstools>=2.4,<3
 # Data stack (numpy<2 is forced by secfsdstools -> caps us at Python 3.12)
 pandas>=2.1,<2.3
 numpy>=1.26,<2.0
-pyarrow>=19
+pyarrow>=19,<26   # 26 needs numpy 2
 fastparquet>=2024.2
 
 # Prices
