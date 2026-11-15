@@ -141,13 +141,19 @@ def build_payload(
     asof: str,
     params: dict | None = None,
     generated: str | None = None,
+    filings_through: str | None = None,
 ) -> dict:
-    """A JSON-serializable dict: metadata + one record per row (NaN -> null)."""
+    """A JSON-serializable dict: metadata + one record per row (NaN -> null).
+
+    ``filings_through`` is the latest filing date in the fundamentals the list was
+    ranked on (:func:`lti.fundamentals.filings_through`).
+    """
     view = build_view(ranked, detail=True)
     rows = json.loads(view.to_json(orient="records")) if not view.empty else []
     return {
         "generated_utc": generated or _now_utc_iso(),
         "asof": str(asof),
+        "filings_through": filings_through,
         "params": params or {},
         "count": len(rows),
         "columns": list(view.columns),
@@ -439,8 +445,12 @@ def render_html(
     params: dict | None = None,
     generated: str | None = None,
     assumptions: ValuationAssumptions | None = None,
+    filings_through: str | None = None,
 ) -> str:
     """A self-contained HTML page: no scripts, no external resources.
+
+    ``filings_through`` — the latest filing date in the fundamentals — goes in the
+    line under the title: prices are a day old, the filings can be months old.
 
     Every row opens in place to its breakdown (:func:`render_breakdown_html`).
     ``assumptions`` are the ones ``ranked`` was valued at, for those
@@ -502,7 +512,10 @@ def render_html(
             '  <a class="dl" href="undervalued.csv">Download CSV</a>'
         )
 
-    meta_line = f"As of <strong>{asof_disp}</strong> &middot; generated {gen_disp}"
+    meta_line = f"Prices as of <strong>{asof_disp}</strong>"
+    if filings_through:
+        meta_line += f" &middot; SEC filings through <strong>{html.escape(str(filings_through))}</strong>"
+    meta_line += f" &middot; generated {gen_disp}"
     if summary:
         meta_line += f"<br>{summary}"
     models = render_models_html()
@@ -545,6 +558,7 @@ def write_artifacts(
     params: dict | None = None,
     generated: str | None = None,
     assumptions: ValuationAssumptions | None = None,
+    filings_through: str | None = None,
 ) -> list[Path]:
     """Write ``index.html``, ``undervalued.json`` and ``undervalued.csv`` into
     ``out_dir`` (created if needed). Returns the written paths.
@@ -560,11 +574,15 @@ def write_artifacts(
     csv_path = out / "undervalued.csv"
 
     html_path.write_text(
-        render_html(ranked, asof=asof, params=params, generated=generated, assumptions=assumptions),
+        render_html(ranked, asof=asof, params=params, generated=generated, assumptions=assumptions,
+                    filings_through=filings_through),
         encoding="utf-8",
     )
     json_path.write_text(
-        json.dumps(build_payload(ranked, asof=asof, params=params, generated=generated), indent=2),
+        json.dumps(
+            build_payload(ranked, asof=asof, params=params, generated=generated, filings_through=filings_through),
+            indent=2,
+        ),
         encoding="utf-8",
     )
     csv_path.write_text(render_csv(ranked), encoding="utf-8")

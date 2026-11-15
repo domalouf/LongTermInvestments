@@ -162,6 +162,15 @@ def test_write_artifacts_uses_shared_generated_timestamp(tmp_path, ranked):
     assert "2026-09-05 12:00:00 UTC" in (tmp_path / "index.html").read_text()
 
 
+def test_the_page_says_how_old_the_filings_are(tmp_path, ranked):
+    report.write_artifacts(ranked, tmp_path, asof="2026-11-13", filings_through="2026-09-30")
+    assert json.loads((tmp_path / "undervalued.json").read_text())["filings_through"] == "2026-09-30"
+    page = (tmp_path / "index.html").read_text()
+    assert "Prices as of <strong>2026-11-13</strong>" in page
+    assert "SEC filings through <strong>2026-09-30</strong>" in page
+    assert "SEC filings through" not in report.render_html(ranked, asof="2026-11-13")
+
+
 def test_each_row_opens_to_how_its_fair_value_was_decided(ranked):
     """The rows are the breakdowns: each name's row opens in place to its arithmetic — the mean,
     the equations with its numbers, the variables — with no second list repeating the names."""

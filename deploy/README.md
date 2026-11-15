@@ -5,6 +5,8 @@ How the investing tools reach the web.
 | Piece | Who sees it | Where it runs | How |
 | --- | --- | --- | --- |
 | **Undervalued today** — daily list | public | static files in the site's web root (`domalouf.com/invest/`) | `publish-undervalued.sh` + `lti-undervalued.timer` |
+| **Fundamentals** — the SEC filings everything ranks on | — | the server | `update-fundamentals.sh` + `lti-fundamentals.timer`, weekly |
+| **Track-record backup** | — | a second machine | `lti-track-pull.timer` |
 | **Full Streamlit GUI** (screener, backtest, …) | just you | the always-on server (`lts`) | `lti-streamlit.service`, behind the site's admin sign-in |
 
 Everything runs on the **server** (`lts`), which also serves domalouf.com (the site's
@@ -26,8 +28,8 @@ snapshot is copied straight into the local web root.
    logged, not fatal: the list values at the cached rates, or a fixed 9% without any.
 3. `lti track-record` — writes down what each tracked strategy holds today
    (`data/track/records/<date>.parquet`, append-only; see the Track record page).
-   A failure is logged, not fatal. Set `LTI_TRACK_BACKUP` to an rsync destination
-   to keep a copy off this machine — the record can't be rebuilt after the fact.
+   A failure is logged, not fatal. A copy then goes to `LTI_TRACK_BACKUP`
+   (`~/backups/lti-track/` in the shipped unit) — see "Backing up the track record".
 4. `lti undervalued --out build/invest` — regenerates `index.html`,
    `undervalued.json`, `undervalued.csv`.
 5. `rsync` those into `~/site/www/invest/`, the site's web root.
@@ -82,10 +84,10 @@ git pull && pip install -e .            # picks up refresh-prices + the renderer
 
 # install the timer as a user service
 mkdir -p ~/.config/systemd/user
-cp deploy/lti-undervalued.{service,timer} ~/.config/systemd/user/
-#   edit ExecStart in the .service if the repo is not at ~/Projects/LongTermInvestments
+cp deploy/lti-undervalued.{service,timer} deploy/lti-fundamentals.{service,timer} ~/.config/systemd/user/
+#   edit ExecStart in each .service if the repo is not at ~/Projects/LongTermInvestments
 systemctl --user daemon-reload
-systemctl --user enable --now lti-undervalued.timer
+systemctl --user enable --now lti-undervalued.timer lti-fundamentals.timer
 
 # run the job even when you're logged out
 sudo loginctl enable-linger "$USER"
@@ -93,6 +95,59 @@ sudo loginctl enable-linger "$USER"
 
 Run the job on one machine only: each copy keeps its own append-only track record,
 and two of them diverge.
+
+### Weekly: the fundamentals
+
+The nightly job refreshes prices and rates, not filings. Without this second job the
+list and the track record go on ranking the filings the server was set up with —
+which is what happened from September to November 2026, on filings through June 30.
+`update-fundamentals.sh` (`lti-fundamentals.timer`, Saturdays 14:00 UTC):
+
+1. `lti update --force` — downloads any SEC data set published since the last run
+   and runs the standardization pipeline on it. Only the new quarter is processed:
+   a few minutes, though the concat step peaks near 14 GB of memory.
+2. `lti refresh-tickers` — the SEC's current CIK→ticker map.
+3. `lti build-fundamentals` — `fundamentals.parquet` and `quarterly.parquet` (the
+   trailing-twelve-month rows from 10-Qs). The raw-tag caches beside them rebuild
+   themselves when a quarter has arrived since they were written. The previous
+   tables are kept as `*.prev.parquet`, and put back if the build fails or comes
+   out more than 2% smaller.
+4. `lti fetch-prices` — full history for tickers the cache hasn't seen.
+
+The SEC publishes a quarter at a time, a few weeks after it ends, so most weeks
+change nothing and the tables still trail today by one to four months. The public
+page says how far (*SEC filings through …*), `undervalued.json` carries it as
+`filings_through`, and each track record's sidecar stores it with the number of TTM
+rows — so the record itself dates any change in what the strategies could see.
+
+Both jobs take `data/.lti.lock`, so the nightly one waits rather than rank on a
+half-written table.
+
+```bash
+systemctl --user start lti-fundamentals.service     # run now
+journalctl --user -u lti-fundamentals.service -n 50 -f
+```
+
+### Backing up the track record
+
+`data/track/` is the one thing here that can't be rebuilt: a record is only worth
+anything because it was written on the day. Two copies are kept:
+
+- **On the server**, the nightly job rsyncs it to `~/backups/lti-track/`
+  (`LTI_TRACK_BACKUP` in the unit) — outside the checkout, so it survives a deleted
+  or re-cloned repo, but not the disk.
+- **On another machine**, `lti-track-pull.timer` pulls it over SSH once a day (and
+  at next boot if the machine was off) into `~/backups/lti-track/`. Install it on any
+  machine that can `ssh lts`:
+
+  ```bash
+  cp deploy/lti-track-pull.{service,timer} ~/.config/systemd/user/
+  systemctl --user daemon-reload && systemctl --user enable --now lti-track-pull.timer
+  systemctl --user start lti-track-pull.service && ls ~/backups/lti-track/records | tail -2
+  ```
+
+Neither copy uses `--delete`. Both are in the same house: for a copy elsewhere, point
+a second `rsync` (or a private git remote) at either backup directory.
 
 ### Check it
 
@@ -114,7 +169,7 @@ Set these as `Environment=` lines in `~/.config/systemd/user/lti-undervalued.ser
 | `LTI_DEST` | `~/site/www/invest/` | rsync target |
 | `LTI_UNDERVALUED_ARGS` | — | extra `lti undervalued` flags, e.g. `--min-models 4 --market-cap-min 2000` |
 | `LTI_SKIP_PRICES` | — | `1` to skip the price refresh |
-| `LTI_TRACK_BACKUP` | unset (commented out in the shipped unit) | where to copy `data/track/` after each record; unset, it stays on this machine only |
+| `LTI_TRACK_BACKUP` | `~/backups/lti-track/` (set in the shipped unit) | where to copy `data/track/` after each record; unset, no copy is made |
 
 Schedule lives in the `.timer` (`OnCalendar=*-*-* 07:30:00 UTC`, `Persistent=true`
 so a missed night runs at next boot).

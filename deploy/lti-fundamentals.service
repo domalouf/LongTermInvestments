@@ -1,0 +1,16 @@
+[Unit]
+Description=Rebuild the fundamentals from the SEC's latest data sets
+Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust if the repo is not at ~/Projects/LongTermInvestments:
+ExecStart=%h/Projects/LongTermInvestments/deploy/update-fundamentals.sh
+# A new quarter takes minutes; a first build from nothing takes hours.
+TimeoutStartSec=6h
+Nice=10
+
+[Install]
+WantedBy=default.target

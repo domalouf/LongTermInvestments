@@ -138,6 +138,22 @@ def _scan_quarters(read, label: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True).drop_duplicates("adsh", keep="last")
 
 
+def _cache_is_current(out_path: Path) -> bool:
+    """Whether a derived table was written after the last quarter of SEC data arrived.
+
+    Each table is a scan of every quarter directory, so one built before `lti update`
+    brought in a new quarter has no row for that quarter's filings — and the merge
+    that uses it would quietly leave them without debt, share counts or a SIC code.
+    """
+    if not out_path.exists():
+        return False
+    try:
+        newest = max((d.stat().st_mtime for d in _quarter_dirs()), default=0.0)
+    except FileNotFoundError:  # no raw data on this machine: the cache is all there is
+        return True
+    return out_path.stat().st_mtime >= newest
+
+
 def _write_cache(df: pd.DataFrame, out_path: Path) -> pd.DataFrame:
     """Write a derived table to its parquet cache and hand it straight back."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,7 +185,7 @@ def _read_quarter_sic(qdir: Path) -> pd.DataFrame | None:
 def build_sic_map(force: bool = False) -> pd.DataFrame:
     """``adsh -> sic`` for every indexed filing, cached to ``sic_by_adsh.parquet``."""
     out_path = config.get_paths().sic_parquet
-    if out_path.exists() and not force:
+    if not force and _cache_is_current(out_path):
         return pd.read_parquet(out_path)
 
     df = _scan_quarters(_read_quarter_sic, "SIC").dropna(subset=["adsh"])
@@ -329,7 +345,7 @@ def build_raw_bs_tags(force: bool = False) -> pd.DataFrame:
     Cached to ``raw_bs_tags.parquet``; a full scan reads ~70 quarter files.
     """
     out_path = config.get_paths().raw_bs_tags_parquet
-    if out_path.exists() and not force:
+    if not force and _cache_is_current(out_path):
         return pd.read_parquet(out_path)
 
     df = _scan_quarters(lambda qdir: _read_quarter_tags(qdir, RAW_BS_TAGS, qtrs=0), "BS")
@@ -369,7 +385,7 @@ RAW_IS_TAGS: list[str] = ["OperatingIncomeLoss"]
 def build_raw_is_tags(force: bool = False) -> pd.DataFrame:
     """Per-``adsh`` as-reported annual operating income from raw ``num.txt``."""
     out_path = config.get_paths().raw_is_tags_parquet
-    if out_path.exists() and not force:
+    if not force and _cache_is_current(out_path):
         return pd.read_parquet(out_path)
 
     df = _scan_quarters(lambda qdir: _read_quarter_tags(qdir, RAW_IS_TAGS, qtrs=4), "IS")
@@ -501,7 +517,7 @@ def _read_quarter_shares(qdir: Path) -> pd.DataFrame | None:
 def build_raw_share_tags(force: bool = False) -> pd.DataFrame:
     """Per-``adsh`` share counts from raw ``num.txt`` (see :func:`_summarize_shares`)."""
     out_path = config.get_paths().raw_share_tags_parquet
-    if out_path.exists() and not force:
+    if not force and _cache_is_current(out_path):
         return pd.read_parquet(out_path)
 
     return _write_cache(_scan_quarters(_read_quarter_shares, "shares"), out_path)

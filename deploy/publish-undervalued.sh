@@ -14,7 +14,8 @@
 #   LTI_TOP_N        rows to publish               (default: 20)
 #   LTI_SKIP_PRICES  set to 1 to skip the price refresh
 #   LTI_TRACK_BACKUP rsync destination for a copy of data/track/ (e.g. "host:lti-track/");
-#                    unset, the record lives only on this machine
+#                    the shipped unit sets ~/backups/lti-track/, a second copy on this
+#                    machine — lti-track-pull.timer on another one takes it off the disk
 #   LTI_UNDERVALUED_ARGS  extra flags for `lti undervalued` (e.g. "--min-profit-years 5")
 #
 set -euo pipefail
@@ -31,6 +32,11 @@ log() { printf '==> %s  %s\n' "$(date -u +%FT%TZ)" "$*"; }
 source "$venv/bin/activate"
 cd "$repo"
 
+# one job at a time on the data: the weekly fundamentals rebuild (update-fundamentals.sh)
+# rewrites the tables this reads, so wait for it rather than rank on a half-written one
+exec 9>"$repo/data/.lti.lock"
+flock -w 1500 9 || { log "another lti job still holds data/.lti.lock — giving up"; exit 1; }
+
 if [[ "${LTI_SKIP_PRICES:-0}" != "1" ]]; then
   log "refreshing price cache"
   lti refresh-prices
@@ -46,6 +52,7 @@ lti fetch-rates || log "rate refresh failed — valuing at the cached or fixed r
 log "recording today's holdings for the track record"
 lti track-record || log "track record failed — continuing"
 if [[ -n "${LTI_TRACK_BACKUP:-}" ]]; then
+  [[ "$LTI_TRACK_BACKUP" == *:* ]] || mkdir -p "$LTI_TRACK_BACKUP"   # a local path: make it
   rsync -a "$repo/data/track/" "$LTI_TRACK_BACKUP" || log "track record backup failed — continuing"
 fi
 

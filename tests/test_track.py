@@ -76,6 +76,9 @@ def test_record_writes_every_strategy_once(paths, world):
     assert day.exists() and day.with_suffix(".json").exists()
     meta = json.loads(day.with_suffix(".json").read_text())
     assert meta["final_screen"] == track.FINAL_SCREEN and "git_commit" in meta
+    # what the strategies could see, so a rebuild of the fundamentals dates itself
+    assert meta["filings_through"] == str(pd.to_datetime(fund["filed"]).max().date())
+    assert meta["ttm_rows"] == 0
 
     held = rows.groupby("strategy")["ticker"].apply(set)
     assert held["universe"] == {f"T{c:02d}" for c in range(1, 11)}

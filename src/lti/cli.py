@@ -527,7 +527,7 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
     import pandas as pd
 
     from lti import prices, rates, report
-    from lti.fundamentals import load_fundamentals
+    from lti.fundamentals import filings_through, load_fundamentals
     from lti.valuation import ValuationAssumptions, market_assumptions, rank_undervalued
 
     asof = args.asof or pd.Timestamp.today().strftime("%Y-%m-%d")
@@ -554,19 +554,26 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
     treasury = rates.rates_asof(px.rates, asof)["treasury_10y"]
     if args.discount_rate is None and pd.notna(treasury):
         params["treasury_10y"] = float(treasury)  # the report says what the rate was built from
-    ranked = rank_undervalued(load_fundamentals(), px, assumptions=assumptions, **screen)
+    fund = load_fundamentals()
+    through = filings_through(fund)
+    ranked = rank_undervalued(fund, px, assumptions=assumptions, **screen)
 
     if args.out:
-        written = report.write_artifacts(ranked, args.out, asof=asof, params=params, assumptions=assumptions)
+        written = report.write_artifacts(
+            ranked, args.out, asof=asof, params=params, assumptions=assumptions, filings_through=through
+        )
         for p in written:
             print("wrote", p)
 
     if args.format == "json":
-        print(json.dumps(report.build_payload(ranked, asof=asof, params=params), indent=2))
+        print(json.dumps(report.build_payload(ranked, asof=asof, params=params, filings_through=through), indent=2))
     elif args.format == "csv":
         print(report.render_csv(ranked), end="")
     elif args.format == "html":
-        print(report.render_html(ranked, asof=asof, params=params, assumptions=assumptions), end="")
+        print(
+            report.render_html(ranked, asof=asof, params=params, assumptions=assumptions, filings_through=through),
+            end="",
+        )
     elif not args.out:  # text (default) — skip when --out already reported paths
         if ranked.empty:
             print(f"no names pass the filters as of {asof}")

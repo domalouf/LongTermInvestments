@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily pull of the forward track record from the server
+
+[Timer]
+# After the server's nightly record (07:30 UTC). Persistent, so a machine that
+# was off catches up when it next boots.
+OnCalendar=*-*-* 10:00:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
