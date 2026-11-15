@@ -352,6 +352,16 @@ def price_universe(fund: pd.DataFrame) -> list[str]:
     return sorted(fund.loc[mask, "ticker"].astype(str).unique().tolist())
 
 
+def filings_through(fund: pd.DataFrame) -> str | None:
+    """The latest filing date in ``fund``, as ``YYYY-MM-DD`` — how current the table is.
+
+    The SEC publishes its data sets a quarter at a time, so this trails today by up
+    to four months even on the day of a rebuild.
+    """
+    filed = pd.to_datetime(fund["filed"], errors="coerce").max() if "filed" in fund.columns else pd.NaT
+    return None if pd.isna(filed) else str(filed.date())
+
+
 def load_fundamentals(smoke: bool | None = None, quarterly: bool = True) -> pd.DataFrame:
     """The fundamentals table: a row per 10-K, and — with ``quarterly`` and a built
     ``quarterly.parquet`` — a trailing-twelve-month row per usable 10-Q after them

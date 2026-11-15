@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly fundamentals rebuild from the SEC data sets
+
+[Timer]
+# Saturday midday UTC: markets closed, and hours clear of the nightly publish
+# (07:30 UTC), which waits on the same lock if they ever do meet.
+OnCalendar=Sat *-*-* 14:00:00 UTC
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

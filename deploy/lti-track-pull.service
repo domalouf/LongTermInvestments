@@ -1,0 +1,13 @@
+[Unit]
+Description=Pull a copy of the forward track record off the server
+Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs on a machine *other* than the server (one that can `ssh lts`). No --delete:
+# the record is append-only, so a file that vanished there should survive here.
+# Kept apart from this machine's own data/track/, which is not the record.
+ExecStartPre=/usr/bin/mkdir -p %h/backups/lti-track
+ExecStart=/usr/bin/rsync -a -e "ssh -o BatchMode=yes -o ConnectTimeout=20" lts:Projects/LongTermInvestments/data/track/ %h/backups/lti-track/

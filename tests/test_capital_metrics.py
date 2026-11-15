@@ -417,3 +417,28 @@ def test_exclusion_raises_rather_than_silently_passing_everything_through():
     )
     with pytest.raises(KeyError, match="is_financial"):
         ranking.select(df, spec)
+
+
+def test_a_raw_tag_cache_older_than_the_newest_quarter_is_rebuilt(tmp_path, monkeypatch):
+    import os
+
+    quarter = tmp_path / "quarter"
+    (quarter / "2026q2.zip").mkdir(parents=True)
+    monkeypatch.setattr(rawtags, "_quarter_dirs", lambda: sorted(quarter.iterdir()))
+    cache = tmp_path / "raw_bs_tags.parquet"
+    assert not rawtags._cache_is_current(cache)  # never built
+
+    cache.write_bytes(b"")
+    os.utime(quarter / "2026q2.zip", (1000, 1000))
+    os.utime(cache, (2000, 2000))
+    assert rawtags._cache_is_current(cache)
+
+    (quarter / "2026q3.zip").mkdir()  # `lti update` brought in a quarter since
+    os.utime(quarter / "2026q3.zip", (3000, 3000))
+    assert not rawtags._cache_is_current(cache)
+
+    def no_raw_data():
+        raise FileNotFoundError
+
+    monkeypatch.setattr(rawtags, "_quarter_dirs", no_raw_data)
+    assert rawtags._cache_is_current(cache)  # nothing to rebuild from: use what's there

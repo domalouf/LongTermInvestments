@@ -176,9 +176,9 @@ def record(
             "the record is made on the day, not after the fact — for the past, run a backtest"
         )
     asof = px.close.index[px.close.index <= asof].max()  # a weekend or holiday means the close before
-    if fund is None:
-        from lti.fundamentals import load_fundamentals
+    from lti.fundamentals import filings_through, load_fundamentals
 
+    if fund is None:
         fund = load_fundamentals()
 
     out_dir = config.get_paths().track_records_dir
@@ -196,6 +196,10 @@ def record(
         "created_utc": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat(),
         "git_commit": commit,
         "git_dirty": dirty,
+        # what the strategies could see: a rebuild of the fundamentals moves these, and
+        # dates any break in the record that a change of inputs causes
+        "filings_through": filings_through(fund),
+        "ttm_rows": int((fund["form"] == "10-Q").sum()) if "form" in fund.columns else 0,
         "universe_cap_min": UNIVERSE_CAP_MIN,
         "top_n": TOP_N,
         "final_screen": FINAL_SCREEN,
