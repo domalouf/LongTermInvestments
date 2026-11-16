@@ -40,7 +40,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from lti import metrics, pit, prices as prices_mod, sectors
+from lti import history, metrics, pit, prices as prices_mod, sectors
 
 
 @dataclass(frozen=True)
@@ -119,8 +119,8 @@ def classify(fund: pd.DataFrame, px: prices_mod.PriceData, asof, *, revenue_min:
 
     keep = ~(no_equity | stale | unlisted)
     out = metrics.add_fundamental_metrics(snap[keep])
-    nothing = pd.Series(np.nan, index=out.index)
-    out = metrics.add_price_metrics(out, price=nothing, market_cap=nothing)  # for the growth and F-score columns
+    # share issuance, asset growth and the F-score compare two years of filings
+    out = history.add_history(out, fund, asof, px.splits)
     out["status"] = status[keep]
     out["price"] = price[keep]
     out.attrs["excluded"] = {
