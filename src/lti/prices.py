@@ -556,11 +556,64 @@ def load_close() -> pd.DataFrame:
     return _load_panel(config.get_paths().close_parquet)
 
 
-def load_price_data() -> PriceData:
-    return PriceData(
-        adj=load_adj_close(), close=load_close(), splits=load_splits(), dividends=load_dividends(),
-        rates=load_rates(),
-    )
+# A close this many times the bar before it is not a return anyone earned.
+REBASE_JUMP = 5.0
+
+
+def rebase_jumps(adj: pd.DataFrame, close: pd.DataFrame, jump: float = REBASE_JUMP) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Take out one-bar jumps of ``jump``× or more: ``(adj, close, the jumps found)``.
+
+    When a company comes out of bankruptcy its old shares are cancelled and new
+    ones issued, often under the same ticker — and Yahoo joins the two into one
+    series. Oasis Petroleum closed at $0.12 on its last day and "opened" at $31
+    the next: a 258-fold gain on a stock whose holders were wiped out. The same
+    seam appears where a reverse split went unrecorded, or a ticker passed to a
+    different company. Nothing with a real market cap quintuples in a day, so a
+    jump that size is a change of basis, and:
+
+    * in ``close`` — what valuation reads — everything before the last jump
+      becomes NaN. The price there isn't on the basis of the share counts filed
+      at the time, so there is no market cap, and the company can't be screened
+      or bought before the seam;
+    * in ``adj`` — what returns read — the history before each jump is scaled so
+      the jump itself is flat. A position already held across it (the forward
+      track record's) keeps the fall that came before and books no windfall.
+
+    The cache on disk is left as downloaded; this runs on load.
+    """
+    if close.empty:
+        return adj, close, pd.DataFrame(columns=["ticker", "date", "ratio"])
+    filled = close.ffill()
+    ratio = filled / filled.shift(1)
+    hit = (ratio >= jump) & close.notna()
+    flagged = hit.columns[hit.any()]
+    if not len(flagged):
+        return adj, close, pd.DataFrame(columns=["ticker", "date", "ratio"])
+    adj, close = adj.copy(), close.copy()
+    found = []
+    for t in flagged:
+        dates = hit.index[hit[t]]
+        close.loc[close.index < dates[-1], t] = np.nan
+        found += [{"ticker": t, "date": d, "ratio": float(ratio.at[d, t])} for d in dates]
+        if t not in adj.columns:
+            continue
+        series = adj[t].ffill()
+        for d in dates:  # oldest first: each scales everything before it
+            before = series.loc[:d].iloc[-2] if len(series.loc[:d]) > 1 else np.nan
+            r = series.at[d] / before if before and before > 0 else np.nan
+            adj.loc[adj.index < d, t] = adj.loc[adj.index < d, t] * r if np.isfinite(r) else np.nan
+    return adj, close, pd.DataFrame(found, columns=["ticker", "date", "ratio"])
+
+
+def load_price_data(rebase: bool = True) -> PriceData:
+    """Every cached panel. With ``rebase``, one-bar jumps that are a change of basis
+    rather than a return are taken out first (:func:`rebase_jumps`)."""
+    adj, close = load_adj_close(), load_close()
+    if rebase:
+        adj, close, found = rebase_jumps(adj, close)
+        if len(found):
+            LOGGER.info("prices: re-based %d one-bar jumps in %d tickers", len(found), found["ticker"].nunique())
+    return PriceData(adj=adj, close=close, splits=load_splits(), dividends=load_dividends(), rates=load_rates())
 
 
 def price_on_or_before(panel: pd.DataFrame, ticker: str, date: pd.Timestamp, window_days: int = 7) -> float | None:

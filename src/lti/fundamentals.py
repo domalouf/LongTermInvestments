@@ -307,6 +307,10 @@ def build_fundamentals(smoke: bool = False, quarters: list[str] | None = None) -
     del merged
     gc.collect()
     build_quarterly_table(smoke=smoke, quarters=quarters)
+    if not smoke:
+        from lti import successors
+
+        successors.build_successors(pd.read_parquet(out_path, columns=["cik", "filed", "period_end", "revenues", "sic"]))
     return str(out_path)
 
 
@@ -320,7 +324,7 @@ def build_quarterly_table(smoke: bool = False, quarters: list[str] | None = None
     from lti import quarterly
 
     paths = config.get_paths()
-    annual = load_fundamentals(smoke=smoke, quarterly=False)
+    annual = load_fundamentals(smoke=smoke, quarterly=False, linked=False)  # keyed as filed, like the 10-Qs
     if smoke:
         frames = _smoke_standardized_frames(quarters or _SMOKE_DEFAULT_QUARTERS, forms=("10-K", "10-Q"))
         bs_raw, is_raw, cf_raw = frames["BS"], frames["IS"], frames["CF"]
@@ -362,10 +366,14 @@ def filings_through(fund: pd.DataFrame) -> str | None:
     return None if pd.isna(filed) else str(filed.date())
 
 
-def load_fundamentals(smoke: bool | None = None, quarterly: bool = True) -> pd.DataFrame:
+def load_fundamentals(smoke: bool | None = None, quarterly: bool = True, linked: bool = True) -> pd.DataFrame:
     """The fundamentals table: a row per 10-K, and — with ``quarterly`` and a built
     ``quarterly.parquet`` — a trailing-twelve-month row per usable 10-Q after them
-    (``form == "10-Q"``; :func:`lti.pit.annual` strips them again)."""
+    (``form == "10-Q"``; :func:`lti.pit.annual` strips them again).
+
+    With ``linked``, a company that re-registered under a new CIK has its earlier
+    filings filed under the new one (:mod:`lti.successors`); ``cik_reported`` keeps
+    the registrant that filed each row."""
     paths = config.get_paths()
     path = paths.fundamentals_parquet
     qpath = paths.quarterly_parquet
@@ -386,6 +394,11 @@ def load_fundamentals(smoke: bool | None = None, quarterly: bool = True) -> pd.D
         q = pd.read_parquet(qpath)
         if not q.empty:
             df = pd.concat([df, q], ignore_index=True)
+    if linked and smoke is not True:
+        # a company that re-registered under a new CIK keeps one history (lti.successors)
+        from lti import successors
+
+        df = successors.apply_successors(df, successors.load_successors())
     return df
 
 

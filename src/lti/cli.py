@@ -369,6 +369,71 @@ def cmd_factor_study(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_construction_study(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import construction
+
+    r = construction.evaluate()
+    pd.set_option("display.width", 200)
+    print(f"\n=== construction study (rules registered {construction.REGISTERED}) ===")
+    print("each rule's 12-month return less the equal-weighted universe's, monthly as-of dates;")
+    print("t is Newey-West. 2019- was seen before these rules were written: background, not a test.\n")
+    labels = {x.name: x.label for x in construction.RULES}
+    view = r.summary.assign(rule=r.summary["rule"].map(labels))
+    view["excess"] = (view["excess"] * 100).map("{:+.2f}%".format)
+    view["t_nw"] = view["t_nw"].map("{:+.1f}".format)
+    view["beat_universe"] = (view["beat_universe"] * 100).map("{:.0f}%".format)
+    view["names"] = view["names"].round().astype(int)
+    for period, g in view.groupby("period", sort=False):
+        print(period)
+        print(g.drop(columns="period").to_string(index=False))
+        print()
+    _print_warnings(r.warnings)
+
+
+def cmd_survivorship(args: argparse.Namespace) -> None:
+    import pandas as pd
+
+    from lti import survivorship
+
+    r = survivorship.analyze(revenue_min=args.revenue_min * 1e6, start=args.start)
+    pd.set_option("display.width", 200)
+    pct = lambda df, d=1: (df * 100).round(d)  # noqa: E731
+    print(f"\n=== who the backtests can't see (operating companies with listed equity, revenue ${args.revenue_min:,.0f}M+) ===")
+    c = r.census
+    view = pct(c[survivorship.STATUSES], 0).astype(int).astype(str) + "%"
+    view.insert(0, "companies", c["companies"])
+    print(view.to_string())
+    print("\npriced: in the backtests · later_gone: missing, left in a later year · exit_*: missing, this was its last year")
+    print("\n=== the equal-weighted universe, 12 months from each April (%) ===")
+    print(pct(r.universe).to_string())
+    print("\ncompounded, a year:")
+    print(pct(r.universe_cagr, 2).to_string())
+    for s in survivorship.SCENARIOS:
+        print(f"  {s.name}: healthy exits {s.healthy:+.0%}, distressed exits {s.distressed:+.0%} — {s.note}")
+    print("\n=== the best fifth on each price-free factor, less the universe (% a year, average) ===")
+    f = r.factors
+    if not f.empty:
+        view = pct(f.drop(columns=["names", "years_ahead"]), 2)
+        view.insert(0, "names", f["names"].round().astype(int))
+        view["years_ahead"] = (f["years_ahead"] * 100).round().astype(int).astype(str) + "%"
+        print(view.to_string())
+        print("\nexit_*: the best fifth's share of exits less the universe's (points) · survivors: the edge a")
+        print("backtest shows · harsh/central/kind: the edge with the missing put back · years_ahead: how")
+        print("often the survivors' edge was positive")
+    _print_warnings(r.warnings)
+
+
+def cmd_link_successors(args: argparse.Namespace) -> None:
+    from lti import fundamentals, successors
+
+    found = successors.build_successors(fundamentals.load_fundamentals(quarterly=False, linked=False), force=args.force)
+    print(f"linked {len(found)} old registrants to a listed successor")
+    if len(found):
+        print(found.sort_values("last_filed")[["cik", "successor_cik", "ticker", "last_filed", "revenue_ratio"]].to_string(index=False))
+
+
 def cmd_track_record(args: argparse.Namespace) -> None:
     from lti import track
 
@@ -785,6 +850,21 @@ def build_parser() -> argparse.ArgumentParser:
     fs.add_argument("--top-n", type=int, default=30, help="names the final screen's backtest holds")
     fs.add_argument("--no-month-spread", action="store_true", help="skip the 12-month rebalance spread")
     fs.set_defaults(func=cmd_factor_study)
+
+    cs = sub.add_parser(
+        "construction-study",
+        help="the final screen held four other ways (tilt, exclusion, sector-neutral), against its universe",
+    )
+    cs.set_defaults(func=cmd_construction_study)
+
+    sv = sub.add_parser("survivorship", help="who the backtests can't see, and how far that could bend them")
+    sv.add_argument("--revenue-min", type=float, default=500.0, help="universe floor, revenue ($M)")
+    sv.add_argument("--start", type=int, default=2011)
+    sv.set_defaults(func=cmd_survivorship)
+
+    ls = sub.add_parser("link-successors", help="join filings across a change of SEC registrant (Google -> Alphabet)")
+    ls.add_argument("--force", action="store_true", help="re-read the instance names from the raw data")
+    ls.set_defaults(func=cmd_link_successors)
 
     tr = sub.add_parser("track-record", help="record today's holdings for every tracked strategy (once a day)")
     tr.add_argument("--asof", default=None,
