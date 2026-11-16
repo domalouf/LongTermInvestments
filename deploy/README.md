@@ -7,6 +7,7 @@ How the investing tools reach the web.
 | **Undervalued today** — daily list | public | static files in the site's web root (`domalouf.com/invest/`) | `publish-undervalued.sh` + `lti-undervalued.timer` |
 | **Fundamentals** — the SEC filings everything ranks on | — | the server | `update-fundamentals.sh` + `lti-fundamentals.timer`, weekly |
 | **Track-record backup** | — | a second machine | `lti-track-pull.timer` |
+| **Alerts** — a failed job, stale data, a server that's off | — | the server, and a second machine | `alert.sh`, `check-health.sh`, `lti-health.timer`, `lti-watch.timer` |
 | **Full Streamlit GUI** (screener, backtest, …) | just you | the always-on server (`lts`) | `lti-streamlit.service`, behind the site's admin sign-in |
 
 Everything runs on the **server** (`lts`), which also serves domalouf.com (the site's
@@ -84,10 +85,11 @@ git pull && pip install -e .            # picks up refresh-prices + the renderer
 
 # install the timer as a user service
 mkdir -p ~/.config/systemd/user
-cp deploy/lti-undervalued.{service,timer} deploy/lti-fundamentals.{service,timer} ~/.config/systemd/user/
+cp deploy/lti-undervalued.{service,timer} deploy/lti-fundamentals.{service,timer} \
+   deploy/lti-health.{service,timer} deploy/lti-alert@.service ~/.config/systemd/user/
 #   edit ExecStart in each .service if the repo is not at ~/Projects/LongTermInvestments
 systemctl --user daemon-reload
-systemctl --user enable --now lti-undervalued.timer lti-fundamentals.timer
+systemctl --user enable --now lti-undervalued.timer lti-fundamentals.timer lti-health.timer
 
 # run the job even when you're logged out
 sudo loginctl enable-linger "$USER"
@@ -148,6 +150,52 @@ anything because it was written on the day. Two copies are kept:
 
 Neither copy uses `--delete`. Both are in the same house: for a copy elsewhere, point
 a second `rsync` (or a private git remote) at either backup directory.
+
+### Alerts: when something stops
+
+Three things can go wrong without anyone noticing, and each has its own tripwire:
+
+| What | Caught by |
+| --- | --- |
+| A job exits with an error | `OnFailure=lti-alert@%n.service` in both job units |
+| A job "succeeds" on stale data — Yahoo down for a week, a record not written, the weekly rebuild not running | `lti health`, daily, via `lti-health.timer` on the server |
+| The server is off, or its timers are | `lti-watch.timer` on another machine, which runs the same check over SSH |
+
+`lti health` reads staleness off the files themselves and exits 1 if any check fails:
+
+```
+ok    prices                latest close 2026-11-13, 1 trading day behind
+ok    track record          latest record 2026-11-13, 1 trading day behind
+ok    fundamentals rebuild  last built 2026-11-15, 0 days ago (weekly)
+ok    filings               through 2026-09-30, 46 days ago
+ok    10-Q rows             quarterly.parquet present
+ok    rates                 latest reading 2026-11-12, 3 days ago
+ok    published list        generated 2026-11-15 23:32 UTC, 9 hours ago
+```
+
+Daily series may trail by three trading days (a long weekend isn't a missed night), the
+fundamentals by nine days since their last rebuild and 125 since their latest filing —
+the SEC publishes a quarter at a time — and the rates by ten.
+
+Every alert goes through `deploy/alert.sh`, which always writes to the journal and to
+`~/lti-alerts.log`, raises a **desktop notification** where there is a desktop session,
+and POSTs to `LTI_ALERT_URL` when that is set. So out of the box the alerts reach you
+through the second machine's desktop (`lti-watch.timer`, which also pulls nothing and
+changes nothing on the server):
+
+```bash
+# on a machine that can `ssh lts` and has this repo at ~/Projects/LongTermInvestments
+cp deploy/lti-watch.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now lti-watch.timer
+```
+
+For a push to a phone, pick a hard-to-guess [ntfy](https://ntfy.sh) topic, subscribe to
+it in the ntfy app, and put it on the server:
+
+```bash
+mkdir -p ~/.config/lti && echo 'LTI_ALERT_URL=https://ntfy.sh/<your-topic>' > ~/.config/lti/alert.env
+~/Projects/LongTermInvestments/deploy/alert.sh "test" "hello from lts"
+```
 
 ### Check it
 

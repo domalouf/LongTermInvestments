@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the lti server from this machine, and say so here if it needs a look
+Documentation=file://%h/Projects/LongTermInvestments/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# For a machine *other* than the server. Alerts as a desktop notification.
+Environment=LTI_HEALTH_HOST=lts
+ExecStart=%h/Projects/LongTermInvestments/deploy/check-health.sh

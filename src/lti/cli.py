@@ -413,6 +413,15 @@ def cmd_track_report(args: argparse.Namespace) -> None:
         print(curves.iloc[-1].round(3).to_string())
 
 
+def cmd_health(args: argparse.Namespace) -> None:
+    from lti import health
+
+    checks = health.run(published=args.published)
+    print(health.to_json(checks) if args.json else health.render(checks))
+    if not all(c.ok for c in checks):
+        sys.exit(1)
+
+
 def cmd_journal_add(args: argparse.Namespace) -> None:
     from lti import journal
 
@@ -785,6 +794,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     trr = sub.add_parser("track-report", help="how the recorded strategies have done since")
     trr.set_defaults(func=cmd_track_report)
+
+    he = sub.add_parser("health", help="is the data current? exits 1 if a nightly or weekly step has gone stale")
+    he.add_argument("--published", metavar="JSON", help="also check this published undervalued.json's age")
+    he.add_argument("--json", action="store_true")
+    he.set_defaults(func=cmd_health)
 
     ja = sub.add_parser("journal-add", help="log a decision in the decision journal")
     ja.add_argument("ticker")

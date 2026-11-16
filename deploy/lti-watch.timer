@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily check of the lti server from this machine
+
+[Timer]
+OnCalendar=*-*-* 16:00:00 UTC
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
