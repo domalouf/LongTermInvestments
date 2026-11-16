@@ -172,7 +172,8 @@ def evaluate(
     universe: dict[pd.Timestamp, float] = {}
     warnings: list[str] = []
     for asof in grid:
-        u = track.universe(pit.priced_snapshot(fund, asof, px), cap_min)
+        # with_history: share issuance, asset growth and the F-score compare two years of filings
+        u = track.universe(pit.priced_snapshot(fund, asof, px, with_history=True), cap_min)
         u = u[u["ticker"].notna()].drop_duplicates("ticker")
         if len(u) < 50:
             warnings.append(f"{asof.date()}: only {len(u)} companies in the universe; skipped")

@@ -215,6 +215,15 @@ def analyze(
     universe = pd.DataFrame(universe_rows).set_index("year") if universe_rows else pd.DataFrame()
     cagr = universe.apply(_cagr) if not universe.empty else pd.Series(dtype=float)
     factors = pd.DataFrame(
-        {f: pd.DataFrame(rows).drop(columns="year").mean() for f, rows in factor_rows.items() if rows}
+        {
+            f: pd.concat(
+                [
+                    pd.DataFrame(rows).drop(columns="year").mean(),
+                    # the average is dragged about by years like 2020; this is how often it held
+                    pd.Series({"years_ahead": float((pd.DataFrame(rows)["survivors"] > 0).mean())}),
+                ]
+            )
+            for f, rows in factor_rows.items() if rows
+        }
     ).T
     return SurvivorshipResult(census, universe, cagr, factors, warnings)

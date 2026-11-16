@@ -415,11 +415,13 @@ def cmd_survivorship(args: argparse.Namespace) -> None:
     print("\n=== the best fifth on each price-free factor, less the universe (% a year, average) ===")
     f = r.factors
     if not f.empty:
-        view = pct(f.drop(columns="names"), 2)
+        view = pct(f.drop(columns=["names", "years_ahead"]), 2)
         view.insert(0, "names", f["names"].round().astype(int))
+        view["years_ahead"] = (f["years_ahead"] * 100).round().astype(int).astype(str) + "%"
         print(view.to_string())
         print("\nexit_*: the best fifth's share of exits less the universe's (points) · survivors: the edge a")
-        print("backtest shows · harsh/central/kind: the edge with the missing put back")
+        print("backtest shows · harsh/central/kind: the edge with the missing put back · years_ahead: how")
+        print("often the survivors' edge was positive")
     _print_warnings(r.warnings)
 
 
