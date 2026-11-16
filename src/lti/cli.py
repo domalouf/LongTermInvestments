@@ -633,8 +633,22 @@ def cmd_undervalued(args: argparse.Namespace) -> None:
     ranked = rank_undervalued(fund, px, assumptions=assumptions, **screen)
 
     if args.out:
+        # the published page keeps score: how this list and the other tracked ones have done
+        # since each was recorded. A problem there mustn't hold the list back.
+        board = labels = since = None
+        try:
+            from lti import track
+
+            records = track.load_records()
+            if not records.empty:
+                board = track.summary(track.performance(records, px))
+                labels = {s.name: s.label for s in track.STRATEGIES}
+                since = str(records["record_date"].min().date())
+        except Exception as exc:  # noqa: BLE001
+            print(f"scoreboard skipped: {type(exc).__name__}: {exc}", file=sys.stderr)
         written = report.write_artifacts(
-            ranked, args.out, asof=asof, params=params, assumptions=assumptions, filings_through=through
+            ranked, args.out, asof=asof, params=params, assumptions=assumptions, filings_through=through,
+            scoreboard=board, strategy_labels=labels, record_since=since,
         )
         for p in written:
             print("wrote", p)
