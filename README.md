@@ -15,6 +15,8 @@ sorting and filtering the data.
 > lists *currently listed* issuers, and Yahoo often lacks delisted names. Backtests can only
 > trade the survivors, so real-world returns for a value screen are typically **worse** than
 > shown. The app surfaces the affected counts on every run rather than hiding them.
+> `lti survivorship` measures the hole and bounds what it hides — see
+> "Survivorship: who the backtests can't see" below.
 
 ## Setup
 
@@ -84,6 +86,9 @@ lti backtest --magic-formula --top-n 30 --start 2013-01-01
 # 4b. See which metrics actually rank stocks by forward return
 lti factor-ic --start 2012-01-01 --horizon 12 --step 12
 lti factor-study                 # the pre-registered test of published factors (~5 min, see below)
+lti construction-study           # the study's screen held four other ways — tilt, exclusion, sector-neutral (~1 min)
+lti survivorship                 # who the backtests can't see, and how far that could bend them
+lti link-successors              # join filings across a change of registrant (build-fundamentals does this)
 
 # 4c. Today's most undervalued steady earners by blended intrinsic value (normalized earnings)
 lti explain-models               # what each of the six equations does, and what it assumes
@@ -398,6 +403,106 @@ out); and a dozen years of monthly returns is little evidence — an alpha with 
 2 is indistinguishable from none. The curves are regressed as reported, so after costs and
 taxes when the backtest charges them.
 
+### Survivorship: who the backtests can't see
+
+Every backtest here holds only companies that still trade. `lti survivorship`
+(`lti.survivorship`) counts the ones that don't, from the filings themselves — each April,
+every operating company with listed equity and $500M+ of revenue:
+
+| April | companies | in the backtests | missing, left later | missing, last year: healthy | distressed |
+| --- | --- | --- | --- | --- | --- |
+| 2012 | 1,297 | 57% | 40% | 2% | 1% |
+| 2015 | 1,455 | 60% | 35% | 4% | 2% |
+| 2018 | 1,425 | 70% | 25% | 3% | 2% |
+| 2021 | 1,410 | 81% | 14% | 2% | 3% |
+| 2024 | 1,549 | 91% | 5% | 2% | 2% |
+
+**Four in ten of the companies a 2012 screen could have bought are not in the 2012
+backtest.** About 5% of the universe leaves every year — more of them healthy (profitable,
+positive equity: overwhelmingly takeovers) than distressed (a loss or negative equity in the
+last report).
+
+No free source has prices for them — Yahoo returns nothing for a delisted ticker — so the
+bias can't be removed, only bounded. Each missing company is put back at an assumed return
+for its last year, and at the survivors' average before that:
+
+| scenario | healthy exits | distressed exits | equal-weighted universe, 2011–25 |
+| --- | --- | --- | --- |
+| survivors only (what a backtest reports) | — | — | **14.1%** a year |
+| harsh | 0% | −100% | 11.7% |
+| central | +25% | −60% | 13.2% |
+| kind | +40% | −30% | 14.2% |
+
+So the *level* of every backtest is overstated by somewhere between nothing and 2.4 points
+a year, about 0.9 at the central guess. What matters more is that the bias is not the same
+for every strategy. For the factors that need no price, the best fifth against the universe:
+
+| best fifth by | distressed exits vs the universe | edge among survivors | harsh | central | kind |
+| --- | --- | --- | --- | --- | --- |
+| low asset growth | +2.5 points a year | +8.3% | +4.6% | +5.4% | +6.1% |
+| low accruals | +2.8 | +7.6% | +3.5% | +4.5% | +5.3% |
+| low share issuance | −0.7 | +2.6% | +3.5% | +3.2% | +3.0% |
+| high F-score | −1.3 | −2.6% | −0.9% | −1.4% | −1.8% |
+| high operating profitability | −1.4 | −2.5% | −0.7% | −1.3% | −1.9% |
+| high cash profitability | −1.1 | −2.7% | −1.1% | −1.6% | −1.9% |
+| high ROIC | −1.1 | −3.1% | −1.6% | −2.0% | −2.3% |
+
+Shrinking companies and companies with low accruals fail more often than the rest, and a
+survivor-only backtest never books those failures: **two to four points of their apparent
+edge is survivorship.** Quality goes the other way — profitable, high-F-score companies fail
+less, so their survivors are compared against a universe of lucky ones, and the backtests
+*understate* them by one to two points. Low share issuance is the one signal the bias
+barely touches. These are averages over fifteen Aprils, equal-weighted, dominated by a few
+years (the survivors' universe returned 154% from April 2020): read the direction and size of
+the correction, not the edge itself.
+
+What it assumes, and can't do: a company's last year is the twelve months after its final
+10-K; "distressed" is read off that report, and counts some loss-making companies that were
+in fact bought at a premium, which makes the harsh case harsher; size is by revenue because
+a missing company has no market cap; and nothing that needs a price — any valuation ratio,
+shareholder yield, momentum — can be ranked for a company without one, so those backtests
+can't be bounded this way at all. Left out of the count: filers with no EPS (subsidiaries
+with public debt), and companies still filing with no ticker.
+
+### One company, two registrants
+
+Some of what looked like survivorship wasn't. When a company reorganizes under a new
+holding company it gets a new SEC registrant number, and the ticker list — which maps
+*today's* registrants — leaves every filing under the old number without a ticker. To
+every backtest here, Google did not exist before it became Alphabet in 2015; nor Disney
+before 2019, Cigna before 2018, Medtronic before 2015, Broadcom, BlackRock, Eaton, Dow.
+
+`lti.successors` closes that from data already on disk. A filing's XBRL instance document
+is named for its filer (`goog-20131231.xml`), so an old registrant with no ticker is linked
+to the current one trading under that prefix when the handover also looks like one company
+carrying on: the successor's first 10-K follows the predecessor's last within eighteen
+months, the two report revenue within a factor of two, and both are in the same two-digit
+SIC industry. That finds 47 companies; a ticker reissued years later to someone else, or
+handed to a much smaller company, fails the tests. `load_fundamentals()` then files the old
+rows under the successor's CIK and ticker (`cik_reported` keeps the original), so the
+company has one unbroken history — in the backtests and in the five-year normalized
+figures. `lti build-fundamentals` rebuilds the links; `lti link-successors` on its own.
+
+### Seams in the price history
+
+When a company comes out of bankruptcy its old shares are cancelled and new ones issued,
+often under the same ticker, and Yahoo joins the two into one series. Oasis Petroleum
+closed at $0.12 on its last day and at $31 on the new shares' first: a 258-fold "gain" on a
+stock whose holders were wiped out. In the April 2020 universe that one seam was worth 19
+points of the average return. The same thing appears where a reverse split went unrecorded
+or a ticker passed to another company.
+
+Nothing with a real market cap quintuples in a day, so `load_price_data()` treats a close
+five or more times the bar before it as a change of basis (`prices.rebase_jumps`): in
+`close.parquet`'s panel everything before the seam becomes NaN — the price there isn't on
+the basis of the share counts filed then, so the company can't be valued or bought — and in
+the total-return panel the earlier history is scaled so the seam itself is flat. A position
+held across one (the forward track record's) keeps the fall that came before and books no
+windfall. The cache on disk stays as downloaded. 1,859 such bars in 564 tickers are
+handled this way, nearly all of them penny stocks no screen here reaches.
+
+**Returns quoted elsewhere in this README were measured before the last two fixes.**
+
 ## GUI
 
 ```bash
@@ -595,6 +700,31 @@ lose much of their edge after publication. Three later changes are held off so t
 stay reproducible: the study ranks on 10-Ks alone, not the fresher 10-Q rows; it measures free
 cash flow with stock-based pay still in it; and its backtests are gross of trading costs.
 
+### Does it matter how a signal is held? (`lti construction-study`)
+
+The study above left a puzzle: a screen that ranks stocks, whose top 30 lose. Thirty names
+ranked on share issuance, asset growth, shareholder yield and F-score turn out to be one
+bet on shrinking retailers and telecoms. `lti.construction` holds the *same* score on the
+*same* universe four other ways, each expected to beat the equal-weighted universe:
+
+| rule | holds | 2011–18 | 2019– |
+| --- | --- | --- | --- |
+| **tilt** — every company, weighted by its rank | ~1,200 | +0.2% a year (t 0.6) | +0.3% (t 0.3) |
+| **avoid the worst fifth** — hold the rest | ~980 | −0.0% (t −0.1) | +0.2% (t 0.2) |
+| **best fifth of each industry** — the universe's industry mix | ~240 | +0.8% (t 0.9) | +0.0% (t 0.0) |
+| **best fifth outright** — the control, industry bets left in | ~235 | +1.2% (t 1.3) | +0.6% (t 0.3) |
+
+Twelve-month returns less the universe's, from monthly as-of dates, Newey-West t, on the
+factor study's protocol. **None of them is distinguishable from zero in either half.** Held
+broadly the screen no longer loses — the top 30's 3.6 points a year of shortfall was
+concentration, not the signal pointing the wrong way — but it doesn't visibly win either,
+and taking out the industry bets made it worse, not better.
+
+These rules were written on 2026-11-15, *after* the factor study's second half had been
+seen; they exist because of what it showed. So the 2019– column is background, not an
+out-of-sample test, and the code says so. The test is the forward track record, which
+records all four daily from that date.
+
 ### 🔬 Stock detail — one company over time
 Sidebar: **Ticker** (matches the primary symbol *and* the full `tickers_all` list, so
 `JPM` resolves), **Log price axis**, **Mark 10-K filing dates**, **Split-adjust EPS /
@@ -694,7 +824,9 @@ Tracked, fixed in `lti.track.STRATEGIES`: the **Undervalued list** (what's publi
 the factor study's **final screen**, top 30 (does its 2019–25 shortfall persist?); two
 ideas the study suggested but couldn't test — **no heavy diluters** (the universe without
 its top tenth by share issuance) and **cash returners** (top fifth by shareholder yield);
-**quality + value** (top fifth); and the **universe** itself as the yardstick
+**quality + value** (top fifth); the construction study's four rules, from 2026-11-15 —
+the final screen as a **tilt**, as an **exclusion**, and as the **best fifth** of each
+industry and outright; and the **universe** itself as the yardstick
 ($1B+, operating companies, financials and BDCs out, equal-weighted). Give it a year
 before reading anything into it — the page shows a Newey-West t for how far each gap is
 from luck. Set `LTI_TRACK_BACKUP` for the nightly job to keep a copy off the machine: a
@@ -891,6 +1023,10 @@ tests/             pure-logic unit tests (no network / SEC data)
 that can't be rebuilt).
 
 ## Known limitations / v2 ideas
+
+- Survivorship is measured and bounded (`lti survivorship`), not removed: that takes
+  prices for delisted companies, which no free source has. A paid feed with delisted
+  history (CRSP, Norgate, EODHD, Tiingo) would turn the bounds into numbers.
 
 - Rebalancing is annual, even though the fundamentals now include each 10-Q as trailing
   twelve months; the five-year normalized figures are annual by design.
