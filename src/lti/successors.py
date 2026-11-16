@@ -20,7 +20,8 @@ handover also *looks* like one company carrying on:
   predecessor's last (and not long before it) — a ticker reissued years later to
   an unrelated company fails this; and
 * the two filings report revenue within a factor of :data:`MAX_REVENUE_RATIO` of
-  each other — a small company inheriting a famous symbol fails this.
+  each other — a small company inheriting a famous symbol fails this; and
+* both are in the same two-digit SIC industry, where both have a code.
 
 :func:`apply_successors` then files the predecessor's rows under the successor's
 CIK and ticker, keeping the original in ``cik_reported``. Companies that really
@@ -42,7 +43,7 @@ from lti import rawtags
 LOGGER = logging.getLogger(__name__)
 
 MAX_GAP_DAYS = 550  # the successor's first 10-K, after the predecessor's last
-MAX_OVERLAP_DAYS = 400  # ... or this long before it, where both filed for a year
+MAX_OVERLAP_DAYS = 60  # ... or just before it; two registrants filing side by side are two companies
 MAX_REVENUE_RATIO = 2.0
 SUCCESSOR_COLUMNS = ["cik", "successor_cik", "ticker", "tickers_all", "last_filed", "successor_first_filed", "revenue_ratio"]
 
@@ -116,6 +117,10 @@ def find_successors(annual: pd.DataFrame, cik_map: pd.DataFrame, prefixes: pd.Da
             continue
         if not (pd.notna(ratio) and 1 / MAX_REVENUE_RATIO <= ratio <= MAX_REVENUE_RATIO):
             continue
+        if "sic" in rows.columns:
+            a, b = last.at[p.cik, "sic"], first.at[succ.cik, "sic"]
+            if pd.notna(a) and pd.notna(b) and int(a) // 100 != int(b) // 100:
+                continue
         out.append(
             {
                 "cik": int(p.cik), "successor_cik": int(succ.cik), "ticker": succ.ticker,
