@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 import lti.config as config
-from lti import factor, pit, prices as prices_mod, ranking, sectors, study, valuation
+from lti import construction, factor, pit, prices as prices_mod, ranking, sectors, study, valuation
 from lti.ranking import ScreenSpec
 
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +66,9 @@ STRATEGIES: list[Strategy] = [
              "The top fifth by shareholder yield, the other signal that held up in both halves."),
     Strategy("quality_value", "Quality + value (top fifth)",
              "The top fifth of the quality-plus-value composite, which held up in 2019-25."),
+    # the construction study's rules (lti.construction), registered 2026-11-15: the
+    # same screen held four other ways. Recorded from that date; this is their test.
+    *(Strategy(r.name, r.label, r.why) for r in construction.RULES),
     Strategy("universe", "Universe (all)",
              f"Every company in the universe — ${UNIVERSE_CAP_MIN / 1e9:.0f}B+, operating, "
              "financials and BDCs out — equal-weighted: the yardstick."),
@@ -111,11 +114,17 @@ def holdings(
         "quality_value": (_top_fraction(u, "quality_value", 0.2), "quality_value"),
         "universe": (u, "market_cap"),
     }
+    # the construction rules weight the same universe by the same score, each its own way
+    u = u.assign(screen_score=construction.screen_score(u))
+    weights = {r.name: r.weights(u) for r in construction.RULES}
+    for name, w in weights.items():
+        picks[name] = (u[w.reindex(u.index) > 0].sort_values("screen_score", ascending=False), "screen_score")
 
     frames = []
     for name, (df, score_col) in picks.items():
         df = df[df["ticker"].notna()].drop_duplicates("ticker")
-        if df.empty:
+        w = weights[name].reindex(df.index) if name in weights else pd.Series(1.0, index=df.index)
+        if df.empty or not w.sum() > 0:
             LOGGER.warning("track: %s holds nothing on %s", name, asof.date())
             continue
         frames.append(
@@ -127,7 +136,7 @@ def holdings(
                     "ticker": df["ticker"].astype(str).to_numpy(),
                     "cik": df.index.to_numpy(dtype="int64"),
                     "company": df["company"].astype(str).to_numpy() if "company" in df.columns else "",
-                    "weight": 1.0 / len(df),
+                    "weight": (w / w.sum()).to_numpy(dtype="float64"),
                     "close": df["price"].to_numpy(dtype="float64"),
                     "score": df[score_col].to_numpy(dtype="float64") if score_col in df.columns else np.nan,
                 }
