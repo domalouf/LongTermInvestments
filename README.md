@@ -778,6 +778,20 @@ says so. Also on the CLI as `lti undervalued`; with `--out DIR` it writes a self
 `index.html` + `undervalued.{json,csv}`, which `deploy/` publishes nightly to
 `domalouf.com/invest/` as the public daily list.
 
+Those figures predate the successor links and price-seam fix; re-measured after them
+(annual steps from 2012, `lti factor-ic` and `lti backtest --metrics fair_value_upside
+--top-n 30`), the upside's IC is +0.003 (t 0.1) and its top 30 returned 12.5% a year
+against 12.2% for their universe, ahead in 6 of 14 years — no worse than average, and no
+better. Share issuance (t −2.9) and the F-score (t 4.1) rank returns in the same run.
+
+**The public page says all of this itself.** Above the table: that the gap hasn't
+predicted returns, and what has. In the table: *Share count, 1y* and *F-score* beside
+every name, green for a buyback or a score of 7+, red for more than 3% dilution or a score
+of 3 or less — the usual reasons a gap stays wide. Below it: a **scoreboard** of every
+forward-tracked list (`lti.track`) against the universe and SPY at each horizon that has
+come due, with how many months of records that is. `undervalued.json` carries the same
+rows as `scoreboard`.
+
 ### 💼 Portfolio — your own account, against the same money in SPY
 The journal scores decisions but not how much money rode on them; this keeps the account
 itself. An append-only ledger (`data/track/portfolio.jsonl`) of deposits, withdrawals, buys,

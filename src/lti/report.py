@@ -46,6 +46,10 @@ VIEW_COLUMNS: list[str] = [
     "pe_norm",
     "dividend_yield",
     "profit_years",
+    # the two per-company signals that held up out of sample in the factor study,
+    # beside the ranking that didn't: is it issuing shares, and Piotroski's F-score
+    "share_growth",
+    "f_score",
     "revenue_cagr",
     "fcf_conversion",
     "debt_to_equity",
@@ -61,6 +65,8 @@ _COLUMN_LABELS: dict[str, str] = {
     "pe_norm": "P/E (5y)",
     "dividend_yield": "Dividend yield",
     "profit_years": "Profitable yrs",
+    "share_growth": "Share count, 1y",
+    "f_score": "F-score",
     "revenue_cagr": "Revenue growth",
     "fcf_conversion": "Cash conversion",
     "debt_to_equity": "D/E",
@@ -71,15 +77,17 @@ _COLUMN_LABELS: dict[str, str] = {
 _COLUMN_TRACKS: dict[str, str] = {
     "rank": "3.2em",
     "ticker": "5.6em",
-    "company": "minmax(12em, 1fr)",
-    "price": "6.6em",
-    "fair_value_est": "6.8em",
+    "company": "minmax(10.5em, 1fr)",
+    "price": "6.2em",
+    "fair_value_est": "6.4em",
     "fair_value_est_upside": "6.8em",
     "pe_norm": "5.4em",
-    "dividend_yield": "6em",
-    "profit_years": "6.2em",
-    "revenue_cagr": "6.4em",
-    "fcf_conversion": "6.8em",
+    "dividend_yield": "5.6em",
+    "profit_years": "5.6em",
+    "share_growth": "5.6em",
+    "f_score": "4.4em",
+    "revenue_cagr": "5.8em",
+    "fcf_conversion": "6.2em",
     "debt_to_equity": "4.6em",
 }
 
@@ -112,10 +120,27 @@ _NUMERIC_COLUMNS = {
     "pe_norm",
     "dividend_yield",
     "profit_years",
+    "share_growth",
+    "f_score",
     "revenue_cagr",
     "fcf_conversion",
     "debt_to_equity",
 }
+
+# Where a signal reads as plainly good or bad, the cell says so in colour. Share
+# count: buying back at all, or issuing more than 3% a year. F-score: Piotroski's
+# own bands, 7-9 strong and 0-3 weak.
+SHARE_ISSUANCE_WARN = 0.03
+
+
+def _signal_class(col: str, val) -> str:
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return ""
+    if col == "share_growth":
+        return "good" if val < 0 else "bad" if val > SHARE_ISSUANCE_WARN else ""
+    if col == "f_score":
+        return "good" if val >= 7 else "bad" if val <= 3 else ""
+    return ""
 
 # --- shared shaping -------------------------------------------------------
 
@@ -142,6 +167,7 @@ def build_payload(
     params: dict | None = None,
     generated: str | None = None,
     filings_through: str | None = None,
+    scoreboard: pd.DataFrame | None = None,
 ) -> dict:
     """A JSON-serializable dict: metadata + one record per row (NaN -> null).
 
@@ -154,6 +180,9 @@ def build_payload(
         "generated_utc": generated or _now_utc_iso(),
         "asof": str(asof),
         "filings_through": filings_through,
+        "scoreboard": (
+            json.loads(scoreboard.to_json(orient="records")) if scoreboard is not None and not scoreboard.empty else []
+        ),
         "params": params or {},
         "count": len(rows),
         "columns": list(view.columns),
@@ -171,8 +200,10 @@ def render_csv(ranked: pd.DataFrame) -> str:
 def _fmt_cell(col: str, val) -> str:
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return "&mdash;"
-    if col in ("rank", "n_models", "profit_years"):
+    if col in ("rank", "n_models", "profit_years", "f_score"):
         return f"{int(val)}"
+    if col == "share_growth":
+        return f"{val:+.1%}"
     if col in ("price", "fair_value_est"):
         return f"${val:,.2f}"
     if col in ("fair_value_est_upside", "revenue_cagr"):
@@ -264,6 +295,27 @@ summary.cells > .rank::before { content: "\\25B8"; color: var(--muted); font-fam
 details.row[open] .cells > .rank::before { transform: rotate(90deg); color: var(--accent); }
 .cells > .company { white-space: normal; line-height: 1.35; }
 .cells > .ticker { font-weight: 600; }
+.cells > .good { color: var(--pos); }
+.cells > .bad { color: var(--neg); }
+.evidence { margin: 0 0 22px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--panel); font-size: 0.9rem; }
+.evidence h2 { font-size: 1rem; margin: 0 0 6px; }
+.evidence p { margin: 0 0 8px; }
+.evidence p:last-child { margin-bottom: 0; }
+.score { margin-top: 26px; }
+.score h2 { font-size: 1.05rem; margin: 0 0 4px; }
+.score .lede { color: var(--muted); font-size: 0.85rem; margin: 0 0 12px; }
+table.board { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+table.board th { text-align: right; font-weight: 600; color: var(--muted); text-transform: uppercase;
+  font-size: 0.7rem; letter-spacing: 0.04em; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+table.board th:first-child, table.board td:first-child { text-align: left; }
+table.board td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: right;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.board td:first-child { white-space: normal; }
+table.board tr:last-child td { border-bottom: 0; }
+table.board tr.this td { font-weight: 600; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+table.board tr.yard td { color: var(--muted); }
+table.board .pos { color: var(--pos); } table.board .neg { color: var(--neg); }
 .cells > .upside { position: relative; align-self: stretch; display: flex; align-items: center;
   justify-content: flex-end; }
 .cells > .upside .val { position: relative; z-index: 1; color: var(--pos); font-weight: 600; }
@@ -411,6 +463,107 @@ SEC filings and simple valuation models, and can be wrong or out of date. Do
 your own research before buying or selling anything.</p>"""
 
 
+# What this project's own tests say about the ranking it publishes. Up front, not
+# in the footer: a page of "+150% upside" reads as a tip sheet unless it says this.
+_EVIDENCE = """<div class="evidence">
+  <h2>Read this as a research list, not a ranking of what to buy</h2>
+  <p><strong>The size of the gap has not predicted returns.</strong> Tested on this
+  project&rsquo;s own data back to 2012, a wider gap between fair value and price did not go
+  with a better return over the following year, and the thirty widest gaps did no better
+  than the average company they were chosen from. Usually the market knows why a stock is
+  cheap.</p>
+  <p><strong>What did hold up</strong>, in a test whose rules were fixed before its results
+  were seen: companies that are not issuing new shares, and companies with a high
+  Piotroski F-score (nine yes-or-no checks of whether the business is getting financially
+  stronger). Both are shown for every name
+  below &mdash; <em>Share count, 1y</em> and <em>F-score</em> &mdash; so a wide gap can be
+  read against them: a cheap company that is diluting its owners, or weakening, is the
+  usual way a gap stays wide.</p>
+  <p>The list is scored in public from the day it started: see
+  <a href="#scoreboard">the scoreboard</a> below.</p>
+</div>"""
+
+
+def _pct_cell(val, *, signed: bool = True, colour: bool = False) -> str:
+    if val is None or (isinstance(val, float) and math.isnan(val)):
+        return "<td>&mdash;</td>"
+    cls = f' class="{"pos" if val > 0 else "neg"}"' if colour and val else ""
+    return f"<td{cls}>{val:+.1%}</td>" if signed else f"<td{cls}>{val:.1%}</td>"
+
+
+def render_scoreboard_html(
+    scoreboard: pd.DataFrame | None,
+    *,
+    labels: dict[str, str] | None = None,
+    since: str | None = None,
+    this: str = "undervalued_list",
+    yardstick: str = "universe",
+) -> str:
+    """How every tracked list has done since it was written down, the published one among them.
+
+    ``scoreboard`` is :func:`lti.track.summary`: a row per strategy and horizon
+    that has come due. Returns run from the close after each record, so nothing
+    here was known when the list was made. An empty or missing scoreboard still
+    renders the section — saying that nothing has come due yet is the honest state
+    of a young record.
+    """
+    labels = labels or {}
+    head = '<div class="score" id="scoreboard">\n  <h2>Scoreboard: how the lists have done</h2>\n'
+    started = f" since {html.escape(str(since))}" if since else ""
+    if scoreboard is None or scoreboard.empty:
+        return (
+            head + f'  <p class="lede">Every night{started}, this list and several others are written down '
+            "before the next day&rsquo;s prices exist. Nothing has been on record long enough to score yet.</p>\n</div>"
+        )
+    horizons = sorted(int(h) for h in scoreboard["horizon"].unique())
+    by = {(r.strategy, int(r.horizon)): r for r in scoreboard.itertuples(index=False)}
+    order = list(dict.fromkeys([*labels, *scoreboard["strategy"]]))
+    order = [s for s in order if any((s, h) in by for h in horizons)]
+
+    cols = "".join(
+        f"<th>{h}-month return</th><th>vs all companies</th>" for h in horizons
+    )
+    rows = []
+    for s in order:
+        cells = ""
+        for h in horizons:
+            r = by.get((s, h))
+            if r is None:
+                cells += "<td>&mdash;</td><td>&mdash;</td>"
+            elif s == yardstick:
+                cells += _pct_cell(r.ret) + "<td>&mdash;</td>"
+            else:
+                cells += _pct_cell(r.ret) + _pct_cell(r.vs_universe, colour=True)
+        cls = ' class="this"' if s == this else ' class="yard"' if s == yardstick else ""
+        name = html.escape(labels.get(s, s)) + (" &mdash; this page" if s == this else "")
+        rows.append(f"<tr{cls}><td>{name}</td>{cells}</tr>")
+    spy = ""
+    for h in horizons:
+        r = by.get((yardstick, h))
+        spy += (_pct_cell(r.ret - r.vs_spy) if r is not None else "<td>&mdash;</td>") + "<td>&mdash;</td>"
+    rows.append(f'<tr class="yard"><td>S&amp;P 500 (SPY)</td>{spy}</tr>')
+
+    longest = max(horizons)
+    top = by.get((this, longest)) or by.get((yardstick, longest))
+    months = int(top.months) if top is not None else 0
+    records = int(top.records) if top is not None else 0
+    young = (
+        " <strong>That is far too little to tell skill from luck</strong> &mdash; a year of monthly records is the "
+        "least worth reading, and several years the least worth believing."
+        if months < 12 else ""
+    )
+    return (
+        head
+        + f'  <p class="lede">Every night{started}, each list below is written down before the next day&rsquo;s '
+        "prices exist, then scored on what its holdings returned from the next close &mdash; dividends included, "
+        "companies that are later delisted kept in. Averages over "
+        f"{records} daily record{'s' if records != 1 else ''} in {months} month{'s' if months != 1 else ''} "
+        f"at the {longest}-month horizon.{young}</p>\n"
+        f'  <div class="card"><div class="scroll"><table class="board">\n  <thead><tr><th>List</th>{cols}</tr></thead>\n'
+        "  <tbody>" + "\n  ".join(rows) + "</tbody></table></div></div>\n</div>"
+    )
+
+
 _CAVEATS = """
 <ul>
   <li><strong>Universe:</strong> companies whose latest 10-K was filed on or before
@@ -428,9 +581,13 @@ _CAVEATS = """
       five years (a year counts only if EPS, net income and operating income were
       all positive); financials and business development companies are left out.
       <em>Cash conversion</em> is five years&rsquo; free cash flow over net income.</li>
+  <li><strong>Share count, 1y</strong> is the change in shares outstanding between the last
+      two annual reports, adjusted for splits: negative is a buyback, green; more than +3%
+      is dilution, red. <strong>F-score</strong> is Piotroski&rsquo;s, 0 to 9: 7 and up is
+      green, 3 and under red.</li>
   <li><strong>Candidates, not a buy list.</strong> Backtested, the widest gaps have
-      trailed the average steady earner: usually the market knows why a stock is
-      cheap. Watch for businesses in lasting decline &mdash; normalized earnings
+      done no better than the average company they were picked from: usually the market
+      knows why a stock is cheap. Watch for businesses in lasting decline &mdash; normalized earnings
       assume the last five years are a fair guide. The universe is also
       survivorship-biased.</li>
   <li>Not investment advice.</li>
@@ -446,8 +603,15 @@ def render_html(
     generated: str | None = None,
     assumptions: ValuationAssumptions | None = None,
     filings_through: str | None = None,
+    scoreboard: pd.DataFrame | None = None,
+    strategy_labels: dict[str, str] | None = None,
+    record_since: str | None = None,
 ) -> str:
     """A self-contained HTML page: no scripts, no external resources.
+
+    ``scoreboard`` (:func:`lti.track.summary`) is rendered under the list by
+    :func:`render_scoreboard_html`, with ``strategy_labels`` naming its rows and
+    ``record_since`` the first record's date.
 
     ``filings_through`` — the latest filing date in the fundamentals — goes in the
     line under the title: prices are a day old, the filings can be months old.
@@ -494,7 +658,7 @@ def render_html(
                     w = _upside_bar_pct(val, ceiling)
                     cells.append(f'<span class="num upside" style="--w:{w:.1f}%"><span class="val">{text}</span></span>')
                 else:
-                    cells.append(f'<span class="{cls(c)}">{text}</span>')
+                    cells.append(f'<span class="{" ".join(x for x in (cls(c), _signal_class(c, val)) if x)}">{text}</span>')
             why = render_breakdown_html(ranked.iloc[i], assumptions, treasury_10y=treasury_10y)
             anchor = f' id="{_anchor(rec["ticker"])}"' if "ticker" in rec else ""
             rows.append(
@@ -519,6 +683,7 @@ def render_html(
     if summary:
         meta_line += f"<br>{summary}"
     models = render_models_html()
+    board = render_scoreboard_html(scoreboard, labels=strategy_labels, since=record_since)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -532,10 +697,13 @@ def render_html(
 <body>
 <div class="wrap">
   <h1>&#127919; Undervalued today</h1>
-  <p class="sub">The widest gaps between blended intrinsic value and price across the US 10-K universe.</p>
+  <p class="sub">The widest gaps between blended intrinsic value and price across the US 10-K universe &mdash;
+  with what this project&rsquo;s own tests say about them, and a public scoreboard.</p>
   <p class="meta">{meta_line}</p>
   {_NOTICE}
+  {_EVIDENCE}
   {body}
+  {board}
   {models}
   <div class="foot">
     <strong>How this works</strong>
@@ -559,6 +727,9 @@ def write_artifacts(
     generated: str | None = None,
     assumptions: ValuationAssumptions | None = None,
     filings_through: str | None = None,
+    scoreboard: pd.DataFrame | None = None,
+    strategy_labels: dict[str, str] | None = None,
+    record_since: str | None = None,
 ) -> list[Path]:
     """Write ``index.html``, ``undervalued.json`` and ``undervalued.csv`` into
     ``out_dir`` (created if needed). Returns the written paths.
@@ -575,12 +746,16 @@ def write_artifacts(
 
     html_path.write_text(
         render_html(ranked, asof=asof, params=params, generated=generated, assumptions=assumptions,
-                    filings_through=filings_through),
+                    filings_through=filings_through, scoreboard=scoreboard,
+                    strategy_labels=strategy_labels, record_since=record_since),
         encoding="utf-8",
     )
     json_path.write_text(
         json.dumps(
-            build_payload(ranked, asof=asof, params=params, generated=generated, filings_through=filings_through),
+            build_payload(
+                ranked, asof=asof, params=params, generated=generated, filings_through=filings_through,
+                scoreboard=scoreboard,
+            ),
             indent=2,
         ),
         encoding="utf-8",

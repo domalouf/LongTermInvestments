@@ -27,6 +27,8 @@ def ranked() -> pd.DataFrame:
             "pe_norm": [8.0, np.nan],
             "dividend_yield": [0.042, 0.0],
             "profit_years": [5.0, 4.0],
+            "share_growth": [-0.021, 0.064],
+            "f_score": [8.0, 3.0],
             "revenue_cagr": [0.06, -0.02],
             "fcf_conversion": [0.9, np.nan],
             "debt_to_equity": [0.5, 1.2],
@@ -169,6 +171,48 @@ def test_the_page_says_how_old_the_filings_are(tmp_path, ranked):
     assert "Prices as of <strong>2026-11-13</strong>" in page
     assert "SEC filings through <strong>2026-09-30</strong>" in page
     assert "SEC filings through" not in report.render_html(ranked, asof="2026-11-13")
+
+
+def test_the_signals_that_held_up_sit_beside_the_ranking_that_did_not(ranked):
+    doc = report.render_html(ranked, asof="2026-11-13")
+    assert "research list, not a ranking of what to buy" in doc
+    assert doc.index("has not predicted returns") < doc.index('class="list"')  # said above the table
+    # a buyback and a strong F-score read green, dilution and a weak one red
+    assert '<span class="share-growth num good">-2.1%</span>' in doc
+    assert '<span class="share-growth num bad">+6.4%</span>' in doc
+    assert '<span class="f-score num good">8</span>' in doc and '<span class="f-score num bad">3</span>' in doc
+    assert report._signal_class("share_growth", 0.01) == "" and report._signal_class("f_score", 5.0) == ""
+    assert report._signal_class("f_score", float("nan")) == ""
+
+
+def _board() -> pd.DataFrame:
+    row = lambda s, ret, vs_u, vs_spy: dict(  # noqa: E731
+        strategy=s, horizon=1, records=20, months=2, ret=ret, vs_universe=vs_u, vs_spy=vs_spy,
+        beat_universe=0.4, t_vs_universe=float("nan"))
+    return pd.DataFrame([row("undervalued_list", 0.012, -0.008, -0.013), row("no_diluters", 0.022, 0.002, -0.003),
+                         row("universe", 0.020, 0.0, -0.005)])
+
+
+def test_the_scoreboard_shows_every_list_against_the_universe_and_spy(ranked):
+    labels = {"undervalued_list": "Undervalued list (top 30)", "no_diluters": "No heavy diluters", "universe": "Universe (all)"}
+    doc = report.render_html(ranked, asof="2026-11-13", scoreboard=_board(), strategy_labels=labels,
+                             record_since="2026-09-18")
+    board = doc[doc.index('id="scoreboard"'):]
+    assert "since 2026-09-18" in board and "20 daily records in 2 months" in board
+    assert "far too little to tell skill from luck" in board  # under a year of records
+    assert '<tr class="this"><td>Undervalued list (top 30) &mdash; this page</td><td>+1.2%</td><td class="neg">-0.8%</td>' in board
+    assert '<td>No heavy diluters</td><td>+2.2%</td><td class="pos">+0.2%</td>' in board
+    assert "<td>S&amp;P 500 (SPY)</td><td>+2.5%</td>" in board  # the universe's return less its gap to SPY
+    assert board.index("Undervalued list") < board.index("No heavy diluters") < board.index("Universe (all)")
+
+
+def test_a_record_too_young_to_score_says_so(tmp_path, ranked):
+    doc = report.render_html(ranked, asof="2026-11-13", record_since="2026-09-18")
+    assert 'id="scoreboard"' in doc and "Nothing has been on record long enough to score yet" in doc
+    report.write_artifacts(ranked, tmp_path, asof="2026-11-13", scoreboard=_board())
+    payload = json.loads((tmp_path / "undervalued.json").read_text())
+    assert [r["strategy"] for r in payload["scoreboard"]] == ["undervalued_list", "no_diluters", "universe"]
+    assert json.loads(json.dumps(report.build_payload(ranked, asof="2026-11-13")))["scoreboard"] == []
 
 
 def test_each_row_opens_to_how_its_fair_value_was_decided(ranked):
